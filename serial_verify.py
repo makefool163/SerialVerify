@@ -3,7 +3,7 @@ from __future__ import absolute_import, print_function
 
 import threading
 import eventlet
-from eventlet.green import serial
+
 
 class pipe_Str:
     def __init__(self):
@@ -15,8 +15,12 @@ class pipe_Str:
         self.lock.release
     def get(self, l):
         self.lock.acquire()
-        self.buf += inPut
+        ret = self.buf[-l:]
+        self.buf = self.buf[:-l]
         self.lock.release
+        return ret
+    def qsize(self):
+        return len(self.buf)        
 
 if __name__ == "__main__":
     pass
