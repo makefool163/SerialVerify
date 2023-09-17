@@ -97,6 +97,9 @@ class serial_verify:
                 f_len = 0
                 f_len1, f_src, f_trg, f_len2 = struct.unpack ("xxBBBB", frame_head)
                 if f_len1 != f_len2:
+                    # 有一种特殊情况，LL 帧长度出现误码怎么办？
+                    # 解决方案，发 两次 帧长， 万一 两次帧长不一致，先通过校验码确定哪个帧长是正确的
+                    # 如果都对不上，就 放弃掉这个企图，再通过 55 AA 的同步字，找下一帧。                    
                     c1 = cacl_crc16 (d[i:i+f_len1])
                     c2 = cacl_crc16 (d[i:i+f_len2])
                     cc1, = struct.unpack("H", d[i+f_len1:i+f_len1+2])
