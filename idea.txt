@@ -59,3 +59,12 @@
    85 AA XX YY ZZ AA AA CC
 
 负载如何被传递到类中？
+写一个接口函数，把python的pipe转换成字符传入接口函数
+
+接口函数使用free pascal写，避免安装复杂的windows sdk
+接口函数写成 dll/so，这样可以 实现真实的线程化
+
+异步的问题，似乎可以用消息模式解决
+
+使用 eventlet的异步兼容？
+
