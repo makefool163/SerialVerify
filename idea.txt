@@ -1,7 +1,7 @@
 有校验、重发机制的串口通信
 
 数据帧定义
-55 AA XX YY ZZ LL ... CC AA
+55 AA LL XX YY ZZ LL ... CC CC AA
 1、55h AAh 帧同步字， AA 作为帧终结字
 2、XX 源地址码，  排除 55h/AAh
 3、YY 目标地址码，排除 55h/AAh
@@ -11,16 +11,16 @@
    有一种特殊情况，LL 帧长度出现误码怎么办？
    解决方案，发 两次 帧长， 万一 两次帧长不一致，先通过校验码确定两个帧长是正确的
    如果都对不上，就 放弃掉这个企图，再通过 AA 55 AA 的同步字，找下一帧。
-6、CC CRC校验符
+6、CC CC  CRC校验符
 7、Payload中若出现 55h AAh，由于 LL 的控制作用，就不会被识别为帧头
 
 返回帧定义
 返回帧有优先发送的权利，只有所有的返回帧都发完了，才能发数据帧
 因为 AA 不可能出现在帧长中，用 AA 作为返回帧的 特征字
 1、如果通过校验
-   55 AA XX YY ZZ AA 55 CC
+   55 AA XX YY ZZ AA 55 CC CC
 2、如果没有通过校验
-   55 AA XX YY ZZ AA AA CC
+   55 AA XX YY ZZ AA AA CC CC
    没有通过校验的数据帧，要优先重传
 
 因为 pyserial 的 write 方法是阻塞的，所以 写的时候，不能 同时读。
