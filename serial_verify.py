@@ -2,6 +2,8 @@
 from __future__ import absolute_import, print_function
 
 import threading
+import eventlet
+from eventlet.green import serial
 
 class pipe_Str:
     def __init__(self):

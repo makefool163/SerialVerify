@@ -3,12 +3,12 @@ library serial_dll;
 {$mode objfpc}{$H+}
 
 uses
-  Classes
-  { you can add units after this };
+  Classes，
+  SysUtils,
   Windows;
 
 // 初始化函数
-function InitSerialPort: integer;
+function InitSerialPort: integer; export;
 // 启动函数
 procedure StartSerialThreads;
 // 停止函数
