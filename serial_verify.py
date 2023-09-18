@@ -53,6 +53,7 @@ class serial_verify:
         # 确认帧，不可能重发，如果确认帧都不能保证正确，通信效果就岌岌可危了
         self.send_bufs = {}
         self.recv_bufs  = {}
+        self.recv_idx = {}
     def write(self, source, target, buf):
         while (source, target) in self.send_bufs:
             # 前面的数据还没有处理完成，就不执行下面的，保持阻塞状态
@@ -61,31 +62,50 @@ class serial_verify:
         self.send_bufs[(source,target)] = {}
         idx = 0
         while len(buf) > 0:
-            self.send_bufs[(source,target)][idx] = [buf[:0xA2], False]
-            # 前一个元素是 数据 本身，后一个 用来标识 是否已发送过
-            buf = buf[0xA2:]
+            if idx == 0:
+                b_len = struct.pack("H", len(buf))
+                self.send_bufs[(source,target)][idx] = [b"\x00" +b_len +buf[:0x9F], False]
+                # 第一帧的 第  1 个字节为总帧数
+                # 第一帧的 第2、3个字节为总帧数
+                buf = buf[0x9F:]
+            else:
+                self.send_bufs[(source,target)][idx] = [buf[:0xA2], False]
+                # 前一个元素是 数据 本身，后一个 用来标识 是否已发送过
+                buf = buf[0xA2:]
             idx += 1
             if idx == 0x55 or idx == 0xAA:
                 idx += 1
             # 输入 8k 的长度，idx 不会超过 51个
-    def read(self, target, block=False):
-        if block:
-            while target not in self.recv_bufs:
-                # 没有数据，就进行阻塞
+        self.send_bufs[(source,target)][idx][0][0] = struct.pack("B", idx)
+    def read(self, block=False):
+        # 阻塞时，一定要一个返回值
+        # 非阻塞时，没有返回值，则返回None
+        def read_sub(self):
+            for k in self.recv_bufs:            
+                f_idx_len, f_buf_len = self.recv_idx[k]
+                if len(self.recv_idx[k]) == f_idx_len:
+                    ids = list(self.recv_bufs.keys())
+                    ids.sort()
+                    oStr = b""
+                    for i in ids:
+                        oStr += self.recv_bufs[k][i]
+                    del self.recv_bufs[k]
+                    del self.recv_idx[k]
+                    return (k, oStr)
                 asyncio.run(async_sleep())
-        if target in self.recv_bufs:
-            ret = self.recv_bufs[target]
-            del self.recv_bufs[target]
-            return ret
-        else:
             return None
+        ret = read_sub(self)
+        while (type(ret) == None) and block:
+            ret = read_sub(self)
+        return ret
+
     async def Com_Write(self):
         def assemble_Frame(k, i, buf):
             # 55 AA LL XX YY ZZ LL ... CC CC AA
             f_len = len(buf)
-            f_src, f_trg = k
+            tgA, tgB = k
             oStr  = b"\x55\xAA"
-            oStr += struct.pack("BBBBB", f_len, f_src, f_trg, i, f_len)
+            oStr += struct.pack("BBBBB", f_len, tgA, tgB, i, f_len)
             oStr += buf
             cc = cacl_crc16(oStr)
             oStr += struct.pack("H", cc)
@@ -141,7 +161,7 @@ class serial_verify:
                 i = match.start()
                 frame_head = d[i:i +7]
                 f_len = 0
-                f_len1, f_src, f_trg, f_idx, f_len2 = struct.unpack ("xxBBBBB", frame_head)
+                f_len1, tgA, tgB, f_idx, f_len2 = struct.unpack ("xxBBBBB", frame_head)
 
                 if f_len1 == 0xAA and f_len2 == 0xAA:
                     # 接收确认帧
@@ -152,9 +172,9 @@ class serial_verify:
                     if c1 == cc1:
                         d = d[i +10:]
                         # 接收确认帧 无误，处理发送缓冲
-                        if (f_src,f_trg) in self.send_bufs:
-                            if f_idx in self.send_bufs[(f_src,f_trg)]:
-                                del self.send_bufs[(f_src,f_trg)][f_idx]
+                        if (tgA,tgB) in self.send_bufs:
+                            if f_idx in self.send_bufs[(tgA,tgB)]:
+                                del self.send_bufs[(tgA,tgB)][f_idx]
                 elif f_len1 != f_len2:
                     # 有一种特殊情况，LL 帧长度出现误码怎么办？
                     # 解决方案，发 两次 帧长， 万一 两次帧长不一致，先通过校验码确定哪个帧长是正确的
@@ -174,12 +194,19 @@ class serial_verify:
                         f_len = f_len1
                 if f_len > 0 and f_len != 0xAA:
                     # crc校验成功，写输出数据
-                    self.recv_bufs[f_trg] = [f_src, f_idx, d[i+7:i+f_len]]
+                    if (tgA,tgB) not in self.recv_bufs:
+                        self.recv_bufs[(tgA,tgB)] = {}                        
+                    if f_idx == 0:
+                        f_idx_len, f_buf_len, = struct.unpack("BH", d[i+7: i+7+3])
+                        self.recv_idx[(tgA,tgB)] = [f_idx_len, f_buf_len]
+                        self.recv_bufs[(tgA,tgB)][f_idx] = d[i+7+3: i+f_len]
+                    else:
+                        self.recv_bufs[(tgA,tgB)][f_idx] = d[i+7: i+f_len]
                     d = d[i: i +f_len +3]
                     # 返回 确认帧
                     # 55 AA AA XX YY ZZ AA CC CC AA
                     confirm_Str = b"\x55\xAA\xAA" 
-                    confirm_Str += struct.pack("BBB", f_src, f_trg, f_idx) + b"\xAA"
+                    confirm_Str += struct.pack("BBB", tgA, tgB, f_idx) + b"\xAA"
                     cc1 = cacl_crc16(confirm_Str)
                     confirm_Str += struct.pack("H", cc1) + "\xAA"                        
                     self.confirm_Queue.put (confirm_Str)
