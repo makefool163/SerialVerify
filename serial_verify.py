@@ -89,10 +89,11 @@ class serial_verify:
 
     def read(self, block=False):
         """
-        读串口调用
+        读串口调用        
         选阻塞模式时，将阻塞直至有返回值
         非阻塞模式时，若返回值，则返回None
         返回值是((source, target), ret_data) 这样的形式
+        如果串口已经收到了多组数据，本调用仅返回其中一组数据        
         """
         def read_sub(self):
             for k in self.recv_bufs:            
@@ -106,14 +107,20 @@ class serial_verify:
                     del self.recv_bufs[k]
                     del self.recv_idx[k]
                     return (k, oStr)
-                asyncio.run(async_sleep())
             return None
         ret = read_sub(self)
-        while (type(ret) == None) and block:
+        while type(ret) == type(None) and block:
             ret = read_sub(self)
+            asyncio.run(async_sleep())
         return ret
 
     async def Com_Write(self):
+        """
+        内置 的写串口方法
+        需要用 task 来启动
+        pyserial 的write不是异步的，
+        此处的异步是在等待输入数据（即有Write方法写入数据）时进行异步
+        """
         def assemble_Frame(k, i, buf):
             # 55 AA LL XX YY ZZ LL ... CC CC AA
             f_len = len(buf)
@@ -161,6 +168,10 @@ class serial_verify:
             await asyncio.sleep(0.1)
 
     async def Com_Read(self):
+        """
+        内置 的读串口方法
+        需要用 task 来启动
+        """
         d = ""
         while True:
             in_buf = self.com.read_all()
