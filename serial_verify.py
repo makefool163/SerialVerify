@@ -37,6 +37,7 @@ async def async_sleep():
     await asyncio.sleep(0.1)
 
 class serial_verify:
+   
     def __init__(self, com_port, baud_rate):
         self.write_enable = False
         self.com = serial.Serial(port=com_port, 
@@ -54,6 +55,7 @@ class serial_verify:
         self.send_bufs = {}
         self.recv_bufs  = {}
         self.recv_idx = {}
+
     def write(self, source, target, buf):
         while (source, target) in self.send_bufs:
             # 前面的数据还没有处理完成，就不执行下面的，保持阻塞状态
@@ -77,6 +79,7 @@ class serial_verify:
                 idx += 1
             # 输入 8k 的长度，idx 不会超过 51个
         self.send_bufs[(source,target)][idx][0][0] = struct.pack("B", idx)
+
     def read(self, block=False):
         # 阻塞时，一定要一个返回值
         # 非阻塞时，没有返回值，则返回None
@@ -162,7 +165,7 @@ class serial_verify:
                 frame_head = d[i:i +7]
                 f_len = 0
                 f_len1, tgA, tgB, f_idx, f_len2 = struct.unpack ("xxBBBBB", frame_head)
-
+                
                 if f_len1 == 0xAA and f_len2 == 0xAA:
                     # 接收确认帧
                     # 55 AA AA XX YY ZZ AA CC CC AA
