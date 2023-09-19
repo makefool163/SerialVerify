@@ -57,6 +57,13 @@ class serial_verify:
         self.recv_idx = {}
 
     def write(self, source, target, buf):
+        """
+        写串口调用
+        如果串口正忙的话，该调用会被阻塞直到允许数据发送
+        通过指定 source、target，这样可以将串口通道进行 复用
+        source、target信息会传送到对侧
+        不复用，可以把 source、target指定成固定值
+        """
         while (source, target) in self.send_bufs:
             # 前面的数据还没有处理完成，就不执行下面的，保持阻塞状态
             asyncio.run(async_sleep())
@@ -81,8 +88,12 @@ class serial_verify:
         self.send_bufs[(source,target)][idx][0][0] = struct.pack("B", idx)
 
     def read(self, block=False):
-        # 阻塞时，一定要一个返回值
-        # 非阻塞时，没有返回值，则返回None
+        """
+        读串口调用
+        选阻塞模式时，将阻塞直至有返回值
+        非阻塞模式时，若返回值，则返回None
+        返回值是((source, target), ret_data) 这样的形式
+        """
         def read_sub(self):
             for k in self.recv_bufs:            
                 f_idx_len, f_buf_len = self.recv_idx[k]
@@ -165,7 +176,7 @@ class serial_verify:
                 frame_head = d[i:i +7]
                 f_len = 0
                 f_len1, tgA, tgB, f_idx, f_len2 = struct.unpack ("xxBBBBB", frame_head)
-                
+
                 if f_len1 == 0xAA and f_len2 == 0xAA:
                     # 接收确认帧
                     # 55 AA AA XX YY ZZ AA CC CC AA
