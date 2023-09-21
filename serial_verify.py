@@ -9,6 +9,7 @@ import queue
 import time
 import os
 
+import timeit
 import crcmod
 import multiprocessing
 
@@ -131,7 +132,8 @@ class serial_verify:
             if idx == 0x55 or idx == 0xAA:
                 idx += 1
             # 输入 8k 的长度，idx 不会超过 51个
-        self.confirm_timeout_const = 30 * idx * 0xAA * (10.0 / self.baud_rate)        
+        self.confirm_timeout_const = 200 * idx * 0xAA * 10.0 / self.baud_rate
+        #self.confirm_timeout_const = 0.8
         f_head = struct.pack("=BH", idx, buf_len)
         self.send_bufs[(tagA, tagB)][0][0] = f_head +self.send_bufs[(tagA, tagB)][0][0]
         #print ("serial_verify write F_idx", idx)
@@ -217,21 +219,28 @@ class serial_verify:
                         continue
                     if self.send_bufs[k][i][1] == 0:
                         continue
-                    # 超时是一种重发的 启动信号
+                    # 超时是一种重发的 启动信号，由于 串口缓冲区的存在，
+                    # 超时只能是很严重的情况下才能成立
+                    # 而且这样的超时，应该是 硬件链路 有着严重误码，才可能出现
+                    # 既然 误码 程度如此之大，其通信 机制就不是靠 这样的数据帧 设计结构 来解决了
+                    # 帧长 设定为 0xAA，有不必要的开销，如果能更长一些，当然开销要小很多
+                    # 不过 对误码的 处理就更复杂了
                     # 另一种重发的启动信号是，出现了跳帧
                     if time.time() > self.send_bufs[k][i][1] \
                     or (i != ids[-1] and (i +1 not in self.send_bufs[k].keys())):
                         buf = self.send_bufs[k][i][0]
                         oStr = assemble_Frame(k, i, buf)
                         l = self.com.write(oStr)
+                        # Windows 10 系统分配的串口发送缓冲区大小为 4KB
+                        # 表面上 write 是阻塞方式，实际上只是写缓冲区
                         time_out = self.confirm_timeout_const + time.time()
                         self.send_bufs[k][i][1] = time_out
                         #print ("Send Missing Frame com.write", l, end="")
                         print (self.call_name, "Send Missing Frame com.write", i, l, len(ids))
                         #print_hex(oStr, "-")
                         # 若有重发帧，才等待 一下，以使 Com_read 有机会读数据
-                        await asyncio.sleep(self.One_Frame_time_out)
-                    #break
+                        await asyncio.sleep(self.One_Frame_time_out *100)
+                    break
                 #break
             # 切换CPU，也许能接收一下，收到对方的确认信号
             # 3、发送一个未发的数据帧
@@ -407,7 +416,7 @@ def recv(baud_rate, com_port, stop_sign, ret_Q):
 
 def multiP_main():
     baud_rate = 115200
-    baud_rate = 6000000
+    #baud_rate = 6000000
     stop_sign = multiprocessing.Manager().Value("i", 0)
     #stop_sign = multiprocessing.RLock()
     ret_Q = multiprocessing.Queue()
@@ -430,4 +439,6 @@ def multiP_main():
 
 if __name__ == "__main__":
     #asyncio.run(main())
-    multiP_main()
+    #multiP_main()
+    t = timeit.timeit(multiP_main, number=5)
+    print ("sum_time", t, t/5.0)
