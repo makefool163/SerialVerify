@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
 from __future__ import absolute_import, print_function
 
-import threading
 import serial
 import asyncio
 import struct
 import re
 import queue
 import time
-import eventlet
 import os
 
-os.environ['PYTHONASYNCIODEBUG'] = '1'
+import multiprocessing
+
+#os.environ['PYTHONASYNCIODEBUG'] = '1'
 
 def print_hex(buf, f):
     # 把输入的 bytes 打印成 16进制形式
@@ -40,7 +40,7 @@ crc16_table = \
 
 def cacl_crc16(binStr):
     crc = 0xFFFF  
-    for b in binStr:  
+    for b in binStr:
         crc = crc16_table[(crc ^ b) & 0xFF]  
     return crc & 0xFFFF
 
@@ -57,6 +57,8 @@ class serial_verify:
     因为 Write、Read 两个方法都有 协程阻塞的特性
     """
     def __init__(self, com_port, baud_rate, call_name = "default"):
+        self.confirm_timeout_const = 200 * (10.0 / baud_rate)
+        # 在write 方法中，会把全部数据发完的时间 重新设置为 超时时间
         self.call_name = call_name
         self.write_enable = False
         self.baud_rate = baud_rate
@@ -88,9 +90,9 @@ class serial_verify:
         """
         写串口调用
         如果串口正忙的话，该调用会被阻塞直到允许数据发送
-        通过指定 source、target，这样可以将串口通道进行 复用
-        source、target信息会传送到对侧
-        不复用，可以把 source、target指定成固定值
+        通过指定 tagA,tagB （即发送、接受双方的编号），这样可以将串口通道进行 复用
+        tagA,tagB 信息会传送到对侧
+        若不复用，可以把 tagA,tagB 指定成固定值
         """
         while (tagA, tagB) in self.send_bufs:
             # 前面的数据还没有处理完成，就不执行下面的，保持阻塞状态
@@ -99,7 +101,7 @@ class serial_verify:
         # 把 输入 组合成 待发送的 数据帧
         self.send_bufs[(tagA, tagB)] = {}
         idx = 0
-        buf_len = len(buf)
+        buf_len = len(buf)        
         while len(buf) > 0:
             if idx == 0:
                 self.send_bufs[(tagA, tagB)][idx] = [buf[:0x9F], 0]
@@ -114,21 +116,22 @@ class serial_verify:
             if idx == 0x55 or idx == 0xAA:
                 idx += 1
             # 输入 8k 的长度，idx 不会超过 51个
+        self.confirm_timeout_const = 30 * idx * 0xAA * (10.0 / self.baud_rate)
         f_head = struct.pack("=BH", idx, buf_len)
         self.send_bufs[(tagA, tagB)][0][0] = f_head +self.send_bufs[(tagA, tagB)][0][0]
 
     async def read(self, block=False):
         """
-        读串口调用        
+        读串口调用
         选阻塞模式时，将阻塞直至有返回值
         非阻塞模式时，若返回值，则返回None
         返回值是((tagA, tagB), ret_data) 这样的形式
         如果串口已经收到了多组数据，本调用仅返回其中一组数据        
         """
         def read_sub(self):
-            print ("self.recv_bufs", self.recv_bufs)
-            for k in self.recv_bufs:
-                print ("self.recv_idx", self.recv_idx)
+            #print ("self.recv_bufs", self.recv_bufs)
+            for k in self.recv_idx:
+                #print ("                     self.recv_idx", self.recv_idx)
                 f_idx_len, f_buf_len = self.recv_idx[k]
                 if len(self.recv_bufs[k]) == f_idx_len:
                     ids = list(self.recv_bufs[k].keys())
@@ -171,6 +174,7 @@ class serial_verify:
         # 2、补发数据帧
         # 3、正常数据帧
         print (self.call_name, "Com_Write Enter.")
+        #await asyncio.sleep(0.1)
         while True:
             if self.Stop_Sign:
                 break
@@ -179,36 +183,44 @@ class serial_verify:
             while True:
                 try:
                     buf = self.confirm_Queue.get(block=False)
-                    print_hex(buf, "-")
+                    #print_hex(buf, "-")
                     self.com.write(buf)
-                    print (self.call_name, "confirm_Frame com.write", end="")
-                    print_hex (buf, "-")
+                    #print (self.call_name, "confirm_Frame com.write", end="")
+                    #print_hex (buf, "-")
                 except queue.Empty:
                     break
             # 2、补发数据帧
             #print ("Com_Write Missing write")
             for k in self.send_bufs:
-                ids = list(self.send_bufs[k].keys())
-                ids = [i for i in ids if self.send_bufs[k][i][1] > 0]
                 # 选择出 所有已发的 数据帧
+                ids = list(self.send_bufs[k].keys())
+                ids.sort()
                 for i in ids:
-                    if time.time() > self.send_bufs[k][i][1]:
+                    if i not in self.send_bufs[k].keys():
+                        continue
+                    if self.send_bufs[k][i][1] == 0:
+                        continue
+                    # 超时是一种重发的 启动信号
+                    # 另一种重发的启动信号是，出现了跳帧
+                    if time.time() > self.send_bufs[k][i][1] \
+                    or (i != ids[-1] and (i +1 not in self.send_bufs[k].keys())):
                         buf = self.send_bufs[k][i][0]
                         oStr = assemble_Frame(k, i, buf)
                         l = self.com.write(oStr)
-                        time_out = 3 * (10 / self.baud_rate) * len(oStr) + time.time()
+                        time_out = self.confirm_timeout_const + time.time()
                         self.send_bufs[k][i][1] = time_out
                         #print ("Send Missing Frame com.write", l, end="")
-                        print (self.call_name, "Send Missing Frame com.write", l)
+                        print (self.call_name, "Send Missing Frame com.write", i, l, len(ids))
                         #print_hex(oStr, "-")
-                        await asyncio.sleep(0.1)
+
                     #break
+                    await asyncio.sleep(0.1)
                 #break
             # 切换CPU，也许能接收一下，收到对方的确认信号
             # 3、发送一个未发的数据帧
             for k in self.send_bufs:
                 ids = list(self.send_bufs[k].keys())
-                print (ids)
+                #print (ids)
                 ids = [i for i in ids if self.send_bufs[k][i][1] == False]
                 # 把未发送的数据找出来
                 if len(ids) > 0:
@@ -216,9 +228,9 @@ class serial_verify:
                     buf = self.send_bufs[k][ids[0]][0]
                     oStr = assemble_Frame(k, ids[0], buf)
                     l = self.com.write(oStr)
-                    print (self.call_name, "Send Normal Frame com.write", l, end=",")
-                    print_hex(oStr, "-")
-                    time_out = 3 * (10 / self.baud_rate) * len(oStr) + time.time()
+                    #print (self.call_name, "Send Normal Frame com.write", ids[0], l)
+                    #print_hex(oStr, "-")
+                    time_out = self.confirm_timeout_const + time.time()
                     self.send_bufs[k][ids[0]][1] = time_out # 超时的时间点
                 break
                 # 只发一个正常的数据帧
@@ -231,6 +243,7 @@ class serial_verify:
         需要用 task 来启动
         """
         print (self.call_name, "Com_Read Enter.")
+        #await asyncio.sleep(0.1)
         d = b""
         while True:
             if self.Stop_Sign:
@@ -239,35 +252,37 @@ class serial_verify:
                 # 没有数据缓冲，可以切换出去了
                 await asyncio.sleep(0.1)
             in_buf = self.com.read(self.com.in_waiting)
-            print (self.call_name, "Com_Read from Buf", end="")
-            print_hex (in_buf, "-")
+            #print (self.call_name, "Com_Read from Buf", end="")
+            #print_hex (in_buf, "-")
             d += in_buf
-            print (self.call_name, " Com_Work_Read d +++++++++++++ ", end="")
-            print_hex (d, "-")            
+            #print (self.call_name, " Com_Work_Read d +++++++++++++ ", end="")
+            #print_hex (d, "-")            
             # 找 第一个 55 AA 帧同步字
             # 55 AA LL XX YY ZZ LL ... CC CC AA
             match = re.search(b"\x55\xAA", d)
-            if match:
+            if match and len(d) >= match.start()+7:
                 i = match.start()
                 frame_head = d[i:i +7]
                 f_len = 0
                 f_len1, tgA, tgB, f_idx, f_len2 = struct.unpack ("=xxBBBBB", frame_head)
-                print ("f_len1, tgA, tgB, f_idx, f_len2", f_len1, tgA, tgB, f_idx, f_len2, len(d[i:]))
+                #print ("f_len1, tgA, tgB, f_idx, f_len2", f_len1, tgA, tgB, f_idx, f_len2, len(d[i:]))
 
-                if f_len1 +10 <= len(d[i:]) and f_len2 +10 <= len(d[i:]):
-                    if f_len1 == 0xAA and f_len2 == 0xAA:
-                        # 接收确认帧
-                        # 55 AA AA XX YY ZZ AA CC CC AA
-                        # 确认帧如果出错的话，通信就岌岌可危了
-                        c1 = cacl_crc16 (d[i:i+7])
-                        cc1, = struct.unpack("=H", d[i+7:i+7+2])
-                        if c1 == cc1:
-                            d = d[i +10:]
-                            # 接收确认帧 无误，处理发送缓冲
-                            if (tgA,tgB) in self.send_bufs:
-                                if f_idx in self.send_bufs[(tgA,tgB)]:
-                                    del self.send_bufs[(tgA,tgB)][f_idx]
-                    elif f_len1 != f_len2:
+                if f_len1 == 0xAA and f_len2 == 0xAA:
+                    # 接收确认帧
+                    # 55 AA AA XX YY ZZ AA CC CC AA
+                    # 确认帧如果出错的话，通信就岌岌可危了
+                    c1 = cacl_crc16 (d[i: i +7])
+                    cc1, = struct.unpack("=H", d[i +7:i +7+2])
+                    #print (self.call_name, "Recv Confirm Frame Test ", tgA, tgB, f_idx)
+                    if c1 == cc1:
+                        # 接收确认帧 无误，处理发送缓冲
+                        if (tgA,tgB) in self.send_bufs:
+                            if f_idx in self.send_bufs[(tgA,tgB)]:
+                                del self.send_bufs[(tgA,tgB)][f_idx]
+                                #print (self.call_name, "Recv Confirm Frame", tgA, tgB, f_idx)
+                    d = d[i +7 +3:]
+                elif f_len1 +10 <= len(d[i:]) and f_len2 +10 <= len(d[i:]):
+                    if f_len1 != f_len2:
                         # 有一种特殊情况，LL 帧长度出现误码怎么办？
                         # 解决方案，发 两次 帧长， 万一 两次帧长不一致，先通过校验码确定哪个帧长是正确的
                         # 如果都对不上，就 放弃掉这个企图，再通过 55 AA 的同步字，找下一帧。                    
@@ -284,10 +299,10 @@ class serial_verify:
                         cc1, = struct.unpack("=H", d[i +7 +f_len1:i +7 +f_len1+2])
                         if c1 == cc1:
                             f_len = f_len1
-                    print (self.call_name, "CRC confirm", f_len)
+                    #print (self.call_name, "CRC confirm", f_len)
                     if f_len > 0 and f_len != 0xAA:
                         # crc校验成功，写输出数据
-                        if (tgA,tgB) not in self.recv_bufs:
+                        if (tgA,tgB) not in self.recv_idx:
                             self.recv_bufs[(tgA,tgB)] = {}
                         if f_idx not in self.recv_bufs[(tgA,tgB)]:
                             # 已经接收过了，就不再重写了，对付 不必要的 补发帧
@@ -295,56 +310,106 @@ class serial_verify:
                                 # 先要 知道 这个数据包，包括了多少个数据帧，
                                 # 这样在收到了足够的帧后，才可以通过Read调用把整个数据包交出去
                                 f_idx_len, f_buf_len, = struct.unpack("=BH", d[i +7: i +7 +3])
-                                print ("f_idx_len, f_buf_len ", f_idx_len, f_buf_len)
                                 self.recv_idx[(tgA,tgB)] = [f_idx_len, f_buf_len]
+                                #print ("f_idx_len, f_buf_len ", f_idx_len, f_buf_len)
                                 self.recv_bufs[(tgA,tgB)][f_idx] = d[i +7 +3: i +7 +f_len]
                             else:
                                 self.recv_bufs[(tgA,tgB)][f_idx] = d[i +7: i +7 +f_len]
-                        d = d[i: i +f_len +3]
-                        # 返回 确认帧
-                        # 55 AA AA XX YY ZZ AA CC CC AA
-                        confirm_Str = b"\x55\xAA\xAA" 
-                        confirm_Str += struct.pack("=BBB", tgA, tgB, f_idx) + b"\xAA"
-                        cc1 = cacl_crc16(confirm_Str)
-                        confirm_Str += struct.pack("=H", cc1) + b"\xAA"
-                        self.confirm_Queue.put (confirm_Str)
-                        self.confirm_Queue.put (confirm_Str)
+                            # 返回 确认帧
+                            # 55 AA AA XX YY ZZ AA CC CC AA
+                            confirm_Str = b"\x55\xAA\xAA" 
+                            confirm_Str += struct.pack("=BBB", tgA, tgB, f_idx) + b"\xAA"
+                            cc1 = cacl_crc16(confirm_Str)
+                            confirm_Str += struct.pack("=H", cc1) + b"\xAA"
+                            self.confirm_Queue.put (confirm_Str)
+                            #self.confirm_Queue.put (confirm_Str)
+                            print (self.call_name, "Recv Right ", tgA, tgB, f_idx)
+                        d = d[i +7 +f_len +3:]
                         # 确认帧 要连发两次
                     else:
+                        print (self.call_name, "Recv Fail  ", tgA, tgB, f_idx)
                         # 没有找到，只好跳过这个帧头，继续找下一帧了
                         d = d[i +7:]
-            await asyncio.sleep(0.1)
+            # await asyncio.sleep(0.1)
             # 让出协程
 
 import os
 
-async def exit_fun():
-    await asyncio.sleep(5)
-    for t in asyncio.all_tasks():
-        t.cancel()
-
 async def main():
     #baud_rate = 600
-    baud_rate = 115200
-    C1 = serial_verify("COM8", baud_rate, "C1")
-    C2 = serial_verify("COM3", baud_rate, "C2")
+    #baud_rate = 115200
+    baud_rate = 921600
+    baud_rate = 6000000
+    C1 = serial_verify("COM4", baud_rate, "AA")
+    C2 = serial_verify("COM3", baud_rate, "BB")
 
     C1.Start()
     C2.Start()
 
-    b1 = os.urandom(1*1024)
+    b1 = os.urandom(8*1024)
     #b1 = os.urandom(64)
     print_hex (b1[:10], "-")
     await C1.write(0, 0, b1)
     k, b2 = await C2.read(block=True)
     C1.Stop_Sign = True
     C2.Stop_Sign = True
-    print (b1)
-    print (b2)
+    print (b1[:50])
+    print (b2[:50])
+    if b1 == b2:
+        print ("OK") 
+    else:
+        print ("Fail")
+    await asyncio.sleep(1)
+
+async def send_main(baud_rate, com_port, stop_sign, buf):
+    C1 = serial_verify(com_port, baud_rate, "AA")
+    C1.Start()
+    await C1.write(0, 0, buf)
+    while stop_sign.value == 0:
+        await asyncio.sleep(1)
+    C1.Stop_Sign = True
+    await asyncio.sleep(2)
+
+def send(baud_rate, com_port, stop_sign, buf):
+    asyncio.run(send_main(baud_rate, com_port, stop_sign, buf))
+    
+async def recv_main(baud_rate, com_port, stop_sign):
+    C2 = serial_verify(com_port, baud_rate, "BB")
+    C2.Start()
+    k, b2 = await C2.read(block=True)
+    print (b2[:30])
+    stop_sign.value = 1
+    C2.Stop_Sign = True
+    await asyncio.sleep(2)
+    return b2
+
+def recv(baud_rate, com_port, stop_sign, ret_Q):
+    ret = asyncio.run(recv_main(baud_rate, com_port, stop_sign))
+    print (ret[:30])
+    ret_Q.put(ret)
+
+def multiP_main():
+    baud_rate = 115200
+    baud_rate = 4000000
+    stop_sign = multiprocessing.Manager().Value("i", 0)
+    ret_Q = multiprocessing.Queue()
+    b1 = os.urandom(8*1024)
+
+    send_proc = multiprocessing.Process(target=send, \
+                    args=(baud_rate, "COM3", stop_sign, b1,),daemon=True)
+    recv_proc = multiprocessing.Process(target=recv, \
+                    args=(baud_rate, "COM4", stop_sign,ret_Q),daemon=True)
+    send_proc.start()
+    recv_proc.start()
+    recv_proc.join()
+    send_proc.join()
+
+    b2 = ret_Q.get()
     if b1 == b2:
         print ("OK") 
     else:
         print ("Fail")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    #asyncio.run(main())
+    multiP_main()
