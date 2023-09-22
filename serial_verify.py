@@ -90,6 +90,7 @@ class serial_verify:
         self.confirm_Queue = queue.Queue()
         # 确认帧，不可能重发，如果确认帧都不能保证正确，通信效果就岌岌可危了
         self.send_bufs = {}
+        self.left_bufs = {}
         self.recv_bufs  = {}
         self.recv_idx = {}
         self.Stop_Sign = False
@@ -116,6 +117,7 @@ class serial_verify:
             #asyncio.run(async_sleep())
         # 把 输入 组合成 待发送的 数据帧
         self.send_bufs[(tagA, tagB)] = {}
+        self.left_bufs[(tagA, tagB)] = {}
         idx = 0
         buf_len = len(buf)        
         while len(buf) > 0:
@@ -210,6 +212,24 @@ class serial_verify:
                     break
             # 2、补发数据帧
             #print ("Com_Write Missing write")
+            # 补发 跳帧
+            for k in self.left_bufs:
+                ids = list(self.left_bufs[k].keys())
+                ids.sort()
+                for i in ids:
+                    if i not in self.left_bufs[k].keys():
+                        continue
+                    buf = self.send_bufs[k][i][0]
+                    oStr = assemble_Frame(k, i, buf)
+                    l = self.com.write(oStr)
+                    # Windows 10 系统分配的串口发送缓冲区大小为 4KB
+                    # 表面上 write 是阻塞方式，实际上只是写缓冲区
+                    time_out = self.confirm_timeout_const + time.time()
+                    self.send_bufs[k][i][1] = time_out
+                    print (self.call_name, "Send Missing Frame com.write", i, l, len(ids))
+                    await asyncio.sleep(self.One_Frame_time_out *100)
+            """
+            # 补发 超时帧
             for k in self.send_bufs:
                 # 选择出 所有已发的 数据帧
                 ids = list(self.send_bufs[k].keys())
@@ -225,9 +245,8 @@ class serial_verify:
                     # 既然 误码 程度如此之大，其通信 机制就不是靠 这样的数据帧 设计结构 来解决了
                     # 帧长 设定为 0xAA，有不必要的开销，如果能更长一些，当然开销要小很多
                     # 不过 对误码的 处理就更复杂了
-                    # 另一种重发的启动信号是，出现了跳帧
-                    if time.time() > self.send_bufs[k][i][1] \
-                    or (i != ids[-1] and (i +1 not in self.send_bufs[k].keys())):
+                    if time.time() > self.send_bufs[k][i][1] :
+                    #or (i != ids[-1] and (i +1 not in self.send_bufs[k].keys())):
                         buf = self.send_bufs[k][i][0]
                         oStr = assemble_Frame(k, i, buf)
                         l = self.com.write(oStr)
@@ -242,7 +261,7 @@ class serial_verify:
                         await asyncio.sleep(self.One_Frame_time_out *100)
                     break
                 #break
-            # 切换CPU，也许能接收一下，收到对方的确认信号
+            """
             # 3、发送一个未发的数据帧
             for k in self.send_bufs:
                 ids = list(self.send_bufs[k].keys())
@@ -306,6 +325,13 @@ class serial_verify:
                             if f_idx in self.send_bufs[(tgA,tgB)]:
                                 del self.send_bufs[(tgA,tgB)][f_idx]
                                 #print (self.call_name, "Recv Confirm Frame", tgA, tgB, f_idx)
+                                # 找出 未收到的帧序号，小于 确认帧 序号的，放到补发帧里
+                                if f_idx in self.left_bufs[(tgA,tgB)]:
+                                    del self.left_bufs[(tgA,tgB)][f_idx]
+                                left_idxs = list(self.send_bufs[(tgA,tgB)].keys())
+                                left_idxs = [i for i in left_idxs if i < f_idx]
+                                for idx in left_idxs:
+                                    self.left_bufs[(tgA,tgB)][idx] = self.send_bufs[(tgA,tgB)][idx]
                     d = d[i +7 +3:]
                 elif f_len1 +10 <= len(d[i:]) and f_len2 +10 <= len(d[i:]):
                     if f_len1 != f_len2:
@@ -415,7 +441,9 @@ def recv(baud_rate, com_port, stop_sign, ret_Q):
     ret_Q.put(ret)
 
 def multiP_main():
-    baud_rate = 115200
+    #baud_rate = 115200
+    #baud_rate = 460800
+    baud_rate = 2000000
     #baud_rate = 6000000
     stop_sign = multiprocessing.Manager().Value("i", 0)
     #stop_sign = multiprocessing.RLock()
@@ -425,9 +453,9 @@ def multiP_main():
     send_proc = multiprocessing.Process(target=send, \
                     args=(baud_rate, "COM3", stop_sign, b1,),daemon=True)
     recv_proc = multiprocessing.Process(target=recv, \
-                    args=(baud_rate, "COM4", stop_sign,ret_Q),daemon=True)
-    send_proc.start()
+                    args=(baud_rate, "COM8", stop_sign,ret_Q),daemon=True)
     recv_proc.start()
+    send_proc.start()
     #recv_proc.join()
     #send_proc.join()
 
@@ -439,6 +467,6 @@ def multiP_main():
 
 if __name__ == "__main__":
     #asyncio.run(main())
-    #multiP_main()
-    t = timeit.timeit(multiP_main, number=5)
-    print ("sum_time", t, t/5.0)
+    multiP_main()
+    #t = timeit.timeit(multiP_main, number=5)
+    #print ("sum_time", t, t/5.0)
