@@ -77,11 +77,12 @@ class serial_verify:
         self.call_name = call_name
         self.write_enable = False
         self.baud_rate = baud_rate
-        self.com = serial.Serial(port=com_port, 
+        self.com_port = com_port
+        self.com = serial.Serial(port=self.com_port, 
                                 timeout = 0, 
                                 # non-blocking mode, return immediately in any case, 
                                 # returning zero or more, up to the requested number of bytes
-                                baudrate=baud_rate,
+                                baudrate=self.baud_rate,
                                 rtscts=True,
                                 #dsrdtr=True,
                                 # We use hardware stream control here
@@ -134,7 +135,7 @@ class serial_verify:
             if idx == 0x55 or idx == 0xAA:
                 idx += 1
             # 输入 8k 的长度，idx 不会超过 51个
-        self.confirm_timeout_const = 200 * idx * 0xAA * 10.0 / self.baud_rate
+        self.confirm_timeout_const = 100 * idx * 0xAA * 10.0 / self.baud_rate
         #self.confirm_timeout_const = 0.8
         f_head = struct.pack("=BH", idx, buf_len)
         self.send_bufs[(tagA, tagB)][0][0] = f_head +self.send_bufs[(tagA, tagB)][0][0]
@@ -194,7 +195,7 @@ class serial_verify:
         # 1、接受确认帧
         # 2、补发数据帧
         # 3、正常数据帧
-        print (self.call_name, "Com_Write Enter.")
+        #print (self.call_name, "Com_Write Enter.")
         #await asyncio.sleep(0.1)
         while True:
             if self.Stop_Sign:
@@ -222,13 +223,12 @@ class serial_verify:
                     buf = self.send_bufs[k][i][0]
                     oStr = assemble_Frame(k, i, buf)
                     l = self.com.write(oStr)
-                    # Windows 10 系统分配的串口发送缓冲区大小为 4KB
-                    # 表面上 write 是阻塞方式，实际上只是写缓冲区
+                    while self.com.out_waiting > 0:
+                        await asyncio.sleep(0.01)
                     time_out = self.confirm_timeout_const + time.time()
                     self.send_bufs[k][i][1] = time_out
                     print (self.call_name, "Send Missing Frame com.write", i, l, len(ids))
-                    await asyncio.sleep(self.One_Frame_time_out *100)
-            """
+                    #await asyncio.sleep(self.One_Frame_time_out *100)
             # 补发 超时帧
             for k in self.send_bufs:
                 # 选择出 所有已发的 数据帧
@@ -250,6 +250,8 @@ class serial_verify:
                         buf = self.send_bufs[k][i][0]
                         oStr = assemble_Frame(k, i, buf)
                         l = self.com.write(oStr)
+                        while self.com.out_waiting > 0:
+                            await asyncio.sleep(0.01)
                         # Windows 10 系统分配的串口发送缓冲区大小为 4KB
                         # 表面上 write 是阻塞方式，实际上只是写缓冲区
                         time_out = self.confirm_timeout_const + time.time()
@@ -261,7 +263,6 @@ class serial_verify:
                         await asyncio.sleep(self.One_Frame_time_out *100)
                     break
                 #break
-            """
             # 3、发送一个未发的数据帧
             for k in self.send_bufs:
                 ids = list(self.send_bufs[k].keys())
@@ -273,6 +274,8 @@ class serial_verify:
                     buf = self.send_bufs[k][ids[0]][0]
                     oStr = assemble_Frame(k, ids[0], buf)
                     l = self.com.write(oStr)
+                    while self.com.out_waiting > 0:
+                        await asyncio.sleep(0.01)
                     #print (self.call_name, "Send Normal Frame com.write", ids[0], l)
                     #print_hex(oStr, "-")
                     time_out = self.confirm_timeout_const + time.time()
@@ -287,7 +290,7 @@ class serial_verify:
         内置 的读串口方法
         需要用 task 来启动
         """
-        print (self.call_name, "Com_Read Enter.")
+        #print (self.call_name, "Com_Read Enter.")
         #await asyncio.sleep(0.1)
         d = b""
         while True:
@@ -441,10 +444,11 @@ def recv(baud_rate, com_port, stop_sign, ret_Q):
     ret_Q.put(ret)
 
 def multiP_main():
+    #baud_rate = 9600
     #baud_rate = 115200
     #baud_rate = 460800
     baud_rate = 2000000
-    #baud_rate = 6000000
+    baud_rate = 6000000
     stop_sign = multiprocessing.Manager().Value("i", 0)
     #stop_sign = multiprocessing.RLock()
     ret_Q = multiprocessing.Queue()
@@ -453,7 +457,7 @@ def multiP_main():
     send_proc = multiprocessing.Process(target=send, \
                     args=(baud_rate, "COM3", stop_sign, b1,),daemon=True)
     recv_proc = multiprocessing.Process(target=recv, \
-                    args=(baud_rate, "COM8", stop_sign,ret_Q),daemon=True)
+                    args=(baud_rate, "COM4", stop_sign,ret_Q),daemon=True)
     recv_proc.start()
     send_proc.start()
     #recv_proc.join()
@@ -467,6 +471,7 @@ def multiP_main():
 
 if __name__ == "__main__":
     #asyncio.run(main())
-    multiP_main()
-    #t = timeit.timeit(multiP_main, number=5)
-    #print ("sum_time", t, t/5.0)
+    #multiP_main()
+    N = 1
+    t = timeit.timeit(multiP_main, number=N)
+    print ("sum_time", t, t/N)
