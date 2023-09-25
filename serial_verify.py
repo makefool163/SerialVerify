@@ -103,45 +103,36 @@ class serial_verify:
     def __del__(self):
         self.com.close()
 
-    async def write(self, tagA, tagB, buf):
+    async def write(self, buf):
         """
         写串口调用
         如果串口正忙的话，该调用会被阻塞直到允许数据发送
-        通过指定 tagA, tagB （即发送、接受双方的编号），这样可以将串口通道进行 复用
-        tagA, tagB 信息会传送到对侧
-        若不复用，可以把 tagA,tagB 指定成固定值
-        特别注意， 为了避免与同步字相同 tagA, tagB 取值不能是 0x55 0xAA
         """
-        while (tagA, tagB) in self.send_bufs:
+        while len(self.send_bufs) > 0:
             # 前面的数据还没有处理完成，就不执行下面的，保持阻塞状态
             await asyncio.sleep(0.1)
             #asyncio.run(async_sleep())
         # 把 输入 组合成 待发送的 数据帧
-        self.send_bufs[(tagA, tagB)] = {}
-        self.left_bufs[(tagA, tagB)] = {}
         idx = 0
-        buf_len = len(buf)        
+        buf_len = len(buf)
         while len(buf) > 0:
             if idx == 0:
-                self.send_bufs[(tagA, tagB)][idx] = [buf[:0x9F], 0]
+                self.send_bufs[idx] = [buf[:0x1024 - 3], 0]
                 # 第一帧的 第  1 个字节为总帧数
                 # 第一帧的 第2、3个字节为总帧数
-                buf = buf[0x9F:]
+                buf = buf[0x1024 - 3:]
             else:
-                self.send_bufs[(tagA, tagB)][idx] = [buf[:0xA2], 0]
+                self.send_bufs[idx] = [buf[:0x1024], 0]
                 # 前一个元素是 数据 本身，后一个 用来标识 是否已发送过
-                buf = buf[0xA2:]
+                buf = buf[0x1024:]
             idx += 1
-            if idx == 0x55 or idx == 0xAA:
-                idx += 1
-            # 输入 8k 的长度，idx 不会超过 51个
-        self.confirm_timeout_const = 100 * idx * 0xAA * 10.0 / self.baud_rate
+        self.confirm_timeout_const = 100 * idx * 1024 * 10.0 / self.baud_rate
         #self.confirm_timeout_const = 0.8
         f_head = struct.pack("=BH", idx, buf_len)
-        self.send_bufs[(tagA, tagB)][0][0] = f_head +self.send_bufs[(tagA, tagB)][0][0]
+        self.send_bufs[0][0] = f_head +self.send_bufs[0][0]
         #print ("serial_verify write F_idx", idx)
 
-    async def read(self, block=False):
+    async def read(self, block=True):
         """
         读串口调用
         选阻塞模式时，将阻塞直至有返回值
@@ -151,25 +142,24 @@ class serial_verify:
         """
         def read_sub(self):
             #print ("self.recv_bufs", self.recv_bufs)
-            for k in self.recv_idx:
-                #print ("                     self.recv_idx", self.recv_idx, len(self.recv_bufs[k]))
-                f_idx_len, f_buf_len = self.recv_idx[k]
-                if len(self.recv_bufs[k]) == f_idx_len:
+            #print ("                     self.recv_idx", self.recv_idx, len(self.recv_bufs[k]))
+            if 0 in self.recv_bufs:
+                f_idx_len, f_buf_len = \
+                    struct.unpack("=BH",self.recv_buf[0][0][self.f_head_len:self.f_head_len+3])                
+                if len(self.recv_bufs) == f_idx_len:
                     #print ("serial_verify read already")
-                    ids = list(self.recv_bufs[k].keys())
+                    ids = list(self.recv_bufs.keys())
                     ids.sort()
                     oStr = b""
                     for i in ids:
-                        oStr += self.recv_bufs[k][i]
-                    del self.recv_bufs[k]
-                    del self.recv_idx[k]
-                    return (k, oStr)
+                        oStr += self.recv_bufs[i]
+                    del self.recv_bufs
+                    return (oStr)
             return None
         ret = read_sub(self)
         while type(ret) == type(None) and block:
             ret = read_sub(self)
             await asyncio.sleep(0.1)
-            #asyncio.run(async_sleep())
             # 用事件循环 阻塞一下
         return ret
 
