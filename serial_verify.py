@@ -387,9 +387,9 @@ def multiP_main():
     b1 = os.urandom(8*1024)
 
     send_proc = multiprocessing.Process(target=send, \
-                    args=(baud_rate, "COM3", stop_sign, b1,),daemon=True)
+                    args=(baud_rate, "COM5", stop_sign, b1,),daemon=True)
     recv_proc = multiprocessing.Process(target=recv, \
-                    args=(baud_rate, "COM8", stop_sign,ret_Q),daemon=True)
+                    args=(baud_rate, "COM6", stop_sign,ret_Q),daemon=True)
     recv_proc.start()
     send_proc.start()
     #recv_proc.join()
