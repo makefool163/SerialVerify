@@ -31,6 +31,7 @@ class serial_verify:
     """
     Com_Write, Com_Read 两个方法是 async 协程
     必须使用 create_task 启动，串口读写机制才能工作
+    类里已经提供了Start方法用于进行协程启动
 
     Write、Read 两个方法 提供外部访问本对象
     注意调用 Write、Read 的方法必须使用 await 调用
@@ -60,6 +61,8 @@ class serial_verify:
         self.send_bufs_len = 0
         self.recv_bufs  = {}
         self.Stop_Sign = False
+        self.write_lock = asyncio.Lock()
+        self.read_lock = asyncio.Lock()
 
     def Start(self):
         asyncio.create_task(self.Com_Write())
@@ -73,30 +76,31 @@ class serial_verify:
         写串口调用
         如果串口正忙的话，该调用会被阻塞直到允许数据发送
         """
-        while len(self.send_bufs) > 0:
-            # 前面的数据还没有处理完成，就不执行下面的，保持阻塞状态
-            await asyncio.sleep(0.1)
-            #asyncio.run(async_sleep())
-        # 把 输入 组合成 待发送的 数据帧
-        idx = 0
-        buf_len = len(buf)
-        while len(buf) > 0:
-            if idx == 0:
-                self.send_bufs[idx] = [buf[:0x1024 - 3], 0]
-                # 第一帧的 第  1 个字节为总帧数
-                # 第一帧的 第2、3个字节为总帧数
-                buf = buf[0x1024 - 3:]
-            else:
-                self.send_bufs[idx] = [buf[:0x1024], 0]
-                # 前一个元素是 数据 本身，后一个 用来标识 是否已发送过
-                buf = buf[0x1024:]
-            idx += 1
-        self.send_bufs_len = idx
-        self.confirm_timeout_const = 100 * idx * 1024 * 10.0 / self.baud_rate
-        #self.confirm_timeout_const = 0.8
-        f_head = struct.pack("=BH", idx, buf_len)
-        self.send_bufs[0][0] = f_head +self.send_bufs[0][0]
-        #print ("serial_verify write F_idx", idx)
+        async with self.write_lock:
+            while len(self.send_bufs) > 0:
+                # 前面的数据还没有处理完成，就不执行下面的，保持阻塞状态
+                await asyncio.sleep(0.1)
+                #asyncio.run(async_sleep())
+            # 把 输入 组合成 待发送的 数据帧
+            idx = 0
+            buf_len = len(buf)
+            while len(buf) > 0:
+                if idx == 0:
+                    self.send_bufs[idx] = [buf[:0x1024 - 3], 0]
+                    # 第一帧的 第  1 个字节为总帧数
+                    # 第一帧的 第2、3个字节为总帧数
+                    buf = buf[0x1024 - 3:]
+                else:
+                    self.send_bufs[idx] = [buf[:0x1024], 0]
+                    # 前一个元素是 数据 本身，后一个 用来标识 是否已发送过
+                    buf = buf[0x1024:]
+                idx += 1
+            self.send_bufs_len = idx
+            self.confirm_timeout_const = 100 * idx * 1024 * 10.0 / self.baud_rate
+            #self.confirm_timeout_const = 0.8
+            f_head = struct.pack("=BH", idx, buf_len)
+            self.send_bufs[0][0] = f_head +self.send_bufs[0][0]
+            #print ("serial_verify write F_idx", idx)
 
     async def read(self, block=True):
         """
@@ -125,12 +129,13 @@ class serial_verify:
                     del self.recv_bufs[i]
                     return (oStr)
             return None
-        ret = read_sub(self)
-        while type(ret) == type(None) and block:
+        async with self.read_lock:
             ret = read_sub(self)
-            await asyncio.sleep(0.1)
-            # 用事件循环 阻塞一下
-        return ret
+            while type(ret) == type(None) and block:
+                ret = read_sub(self)
+                await asyncio.sleep(0.1)
+                # 用事件循环 阻塞一下
+            return ret
 
     async def Com_Write(self):
         """
@@ -374,7 +379,7 @@ def multiP_main():
     baud_rate = 1200
     #baud_rate = 115200
     #baud_rate = 460800
-    #baud_rate = 2000000
+    baud_rate = 1000000
     #baud_rate = 6000000
     stop_sign = multiprocessing.Manager().Value("i", 0)
     #stop_sign = multiprocessing.RLock()
@@ -384,7 +389,7 @@ def multiP_main():
     send_proc = multiprocessing.Process(target=send, \
                     args=(baud_rate, "COM3", stop_sign, b1,),daemon=True)
     recv_proc = multiprocessing.Process(target=recv, \
-                    args=(baud_rate, "COM4", stop_sign,ret_Q),daemon=True)
+                    args=(baud_rate, "COM8", stop_sign,ret_Q),daemon=True)
     recv_proc.start()
     send_proc.start()
     #recv_proc.join()
