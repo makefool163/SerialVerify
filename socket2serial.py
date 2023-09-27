@@ -21,7 +21,7 @@ class Socket_Forward_Serial_Base:
         self.readers = {}
         self.writers = {}
     def Start(self):
-        asyncio.create_task(self.com_recv)
+        asyncio.create_task(self.com_recv())
     def Stop(self):
         pass
     async def net_recv(self, svr_port, clt_port):

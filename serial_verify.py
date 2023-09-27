@@ -66,7 +66,7 @@ class serial_verify:
         self.watch_dog = time.time()
 
     def Start(self):
-        asyncio.create_task(self.Watch_Dog)
+        asyncio.create_task(self.Watch_Dog())
         asyncio.create_task(self.Com_Write())
         asyncio.create_task(self.Com_Read())
 
