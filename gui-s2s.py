@@ -78,7 +78,7 @@ class GuiS2SApp:
         self.etPS.insert("0", _text_)
         self.etPS.grid(column=3, row=0)
         self.etPC = ttk.Entry(self.baseToplevel)
-        self.intPortC = tk.IntVar(value=12222)
+        self.intPortC = tk.IntVar(value=10022)
         self.etPC.configure(textvariable=self.intPortC)
         _text_ = '12222'
         self.etPC.delete("0", "end")

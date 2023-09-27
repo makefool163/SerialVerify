@@ -115,7 +115,7 @@
     </child>
     <child>
       <object class="ttk.Entry" id="etPC" named="True">
-        <property name="text" translatable="yes">12222</property>
+        <property name="text" translatable="yes">10022</property>
         <property name="textvariable">int:intPortC</property>
         <layout manager="grid">
           <property name="column">3</property>
