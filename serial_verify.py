@@ -63,13 +63,27 @@ class serial_verify:
         self.Stop_Sign = False
         self.write_lock = asyncio.Lock()
         self.read_lock = asyncio.Lock()
+        self.watch_dog = time.time()
 
     def Start(self):
+        asyncio.create_task(self.Watch_Dog)
         asyncio.create_task(self.Com_Write())
         asyncio.create_task(self.Com_Read())
 
     def __del__(self):
         self.com.close()
+
+    async def Watch_Dog(self):
+        """
+        发现串口有一端时间（40s）没有收到正确的数据，则重启串口
+        (1024 + 12)*10 /600 = 17.266666666666666        
+        """
+        dog_sleep_time = 40
+        while True:
+            await asyncio.sleep(dog_sleep_time)
+            if time.time() - self.watch_dog > dog_sleep_time:
+                self.com.close()
+                self.com.open()
 
     async def write(self, buf):
         """
@@ -279,6 +293,8 @@ class serial_verify:
             # 55 55 55 L1 L2 ZZ ... C1 C2 C3 C4 AA AA
             match = re.search(b"\x55\x55\x55", d)
             if match and len(d) >= match.start() +8:
+                self.watch_dog = time.time()
+                # 喂狗                
                 i = match.start()
                 frame_head = d[i:i +6]
                 f_len = 0
