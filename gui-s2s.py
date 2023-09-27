@@ -11,6 +11,7 @@ import serial.tools.list_ports as port_list
 import os
 import socket
 import asyncio
+os.environ['PYTHONASYNCIODEBUG'] = '1'
 
 #!/usr/bin/python3
 import tkinter as tk

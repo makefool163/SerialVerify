@@ -47,12 +47,12 @@ class Socket_Forward_Serial_Base:
         while True:
             # 这个是阻塞的
             buf = self.serial.read()
-            idx, svr_port, clt_port = struct.unpack("=BII", buf[:3])
-            sc_pack = buf[1:3]
+            idx, svr_port, clt_port = struct.unpack("=BII", buf[:5])
+            sc_pack = buf[1:5]
             if idx == 0:
                 if self.gui_debug != None:
-                    self.gui_debug ('w', str(clt_port) + "\t" +str(len(buf[3:])))
-                self.writers[(svr_port, clt_port)].write (buf[3:])
+                    self.gui_debug ('w', str(clt_port) + "\t" +str(len(buf[5:])))
+                self.writers[(svr_port, clt_port)].write (buf[5:])
             elif idx == 2:
                 self.writers[(svr_port, clt_port)].close()
                 del self.writers[(svr_port, clt_port)]
