@@ -6,6 +6,7 @@ from __future__ import absolute_import, print_function
 # pip install pygubu-designer
 
 from socket2serial import Socket_Forward_Serial_Client, Socket_Forward_Serial_Base
+import serial_verify
 import serial.tools.list_ports as port_list
 import os
 import socket
@@ -118,14 +119,15 @@ class GuiS2SApp:
             print (COM_Name)
             log_file = "d:/stk/s2s_server.log"
             log_file = None
-            self.ss = Socket2Ser_Server(ip=self.strIP_S.get(),\
-                                        port=self.intPortS.get(), \
-                                        com_port=COM_Name, \
-                                        baud_rate=int(self.cmbox_bdrate.get()), \
-                                        debug=0, \
-                                        gui_debug=self.gui_debug,\
-                                        com_log = log_file)
-            self.ss.Start(ConsoleMode=False)
+            self.com_server = serial_verify.serial_verify\
+                (com_port = COM_Name, \
+                baud_rate = int(self.cmbox_bdrate.get())\
+                )
+            self.ss = Socket_Forward_Serial_Base\
+                (serial=self.com_server, \
+                gui_debug=self.gui_debug \
+                )
+            self.ss.Start()
         else:
             self.btServer['text'] = "Run as Server"
             self.btClient['state'] = "normal"
@@ -144,13 +146,16 @@ class GuiS2SApp:
             print (COM_Name)
             log_file = "d:/stk/s2s_client.log"
             log_file = None
-            self.ss = Socket2Ser_Client(ip="localhost",\
-                                        port=self.intPortC.get(), \
-                                        com_port=COM_Name, \
-                                        baud_rate=int(self.cmbox_bdrate.get()), \
-                                        debug=0, \
-                                        gui_debug=self.gui_debug, \
-                                        com_log = log_file)
+            self.com_client = serial_verify.serial_verify\
+                (com_port = COM_Name, \
+                baud_rate = int(self.cmbox_bdrate.get())\
+                )
+            self.ss = Socket_Forward_Serial_Client\
+                (serial=self.com_client, \
+                ports=[self.intPortC.get()], \
+                port_offset=10000, \
+                gui_debug=self.gui_debug \
+                )
             self.ss.Start(ConsoleMode=False)
         else:
             self.btClient['text'] = "Run as Client"
@@ -191,13 +196,12 @@ class GuiS2SApp:
         self.txtRecv_idx = 0
         self.txtSend_idx = 0
 
-    async def coroutine_mainloop(self, n=0):
+    async def coroutine_mainloop(self):
         while True:
             self.mainwindow.update_idletasks()
             self.mainwindow.update()
             await asyncio.sleep(0)
             #eventlet.sleep(n)
-
 
 if __name__ == "__main__":
     app = GuiS2SApp()
@@ -208,4 +212,4 @@ if __name__ == "__main__":
     loop = asyncio.get_event_loop() 
     loop.run_in_executor(None, app.coroutine_mainloop)
     """
-    asyncio.run(app.coroutine_mainloop)
+    asyncio.run(app.coroutine_mainloop())

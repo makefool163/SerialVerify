@@ -15,7 +15,7 @@ import argparse
 #      XX XX 服务器端口号
 #      YY YY 客户端端口号
 class Socket_Forward_Serial_Base:
-    def __init__ (self, serial, gui_debug=False):
+    def __init__ (self, serial, gui_debug=None):
         self.gui_debug = gui_debug
         self.serial = serial
         self.readers = {}
@@ -33,6 +33,8 @@ class Socket_Forward_Serial_Base:
             except Exception as e:
                 break
             if len(d) > 0:
+                if self.gui_debug != None:
+                    self.gui_debug ('r', str(clt_port)+"\t"+str(len(d)))
                 self.serial.write(b"\x00" +sc_pack +d)
                 # 这个是阻塞的
             else:
@@ -48,6 +50,8 @@ class Socket_Forward_Serial_Base:
             idx, svr_port, clt_port = struct.unpack("=BII", buf[:3])
             sc_pack = buf[1:3]
             if idx == 0:
+                if self.gui_debug != None:
+                    self.gui_debug ('w', str(clt_port) + "\t" +str(len(buf[3:])))
                 self.writers[(svr_port, clt_port)].write (buf[3:])
             elif idx == 2:
                 self.writers[(svr_port, clt_port)].close()
@@ -68,7 +72,7 @@ class Socket_Forward_Serial_Client(Socket_Forward_Serial_Base):
         super().__init__(serial, gui_debug)
         self.ports = ports
         self.port_offset = port_offset
-        self.severs = {}
+        self.servers = {}
     async def server_listen(self, reader, writer):
         client_info = writer.get_extra_info('peername')
         clt_port = client_info[1]
