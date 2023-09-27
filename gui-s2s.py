@@ -80,7 +80,7 @@ class GuiS2SApp:
         self.etPC = ttk.Entry(self.baseToplevel)
         self.intPortC = tk.IntVar(value=10022)
         self.etPC.configure(textvariable=self.intPortC)
-        _text_ = '12222'
+        _text_ = '10022'
         self.etPC.delete("0", "end")
         self.etPC.insert("0", _text_)
         self.etPC.grid(column=3, row=1)
