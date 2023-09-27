@@ -3,6 +3,7 @@ from __future__ import absolute_import, print_function
 
 import asyncio
 import struct
+import argparse
 
 # 1    控制命令
 # 1.1  连接服务器
@@ -63,14 +64,16 @@ class Socket_Forward_Serial_Base:
                     self.serial.write (b"\x02" + sc_pack)
 
 class Socket_Forward_Serial_Client(Socket_Forward_Serial_Base):
-    def __init__(self, serial, ports, gui_debug=False):
+    def __init__(self, serial, ports, port_offset=40000, gui_debug=False):
         super().__init__(serial, gui_debug)
         self.ports = ports
+        self.port_offset = port_offset
         self.severs = {}
     async def server_listen(self, reader, writer):
         client_info = writer.get_extra_info('peername')
         clt_port = client_info[1]
         svr_port = reader.get_extra_info('server_port')
+        svr_port = svr_port - self.port_offset
         self.readers[(svr_port, clt_port)] = reader
         self.writers[(svr_port, clt_port)] = writer
     async def Start(self):
@@ -79,6 +82,15 @@ class Socket_Forward_Serial_Client(Socket_Forward_Serial_Base):
             self.servers[port] = await asyncio.start_server(self.server_listen, 'localhost', port)
 
 async def main():
-    
+    parser = argparse.ArgumentParser(description="Forward socket service to another computer via a serial port.")
+    parser.add_argument('Action', choices=['S', 'C'], type=str, help='act as forwarding Server or Client')
+    parser.add_argument('-ip', default='localhost', type=str, help="Connect to Server IP when act as Source, default is localhost")
+    parser.add_argument('-port', default=22, type=int, nargs=1, required=True, help='Connect to Server port when act as source/Listen port when act as target, default is 22')
+    parser.add_argument('-com', type=str, nargs=1, required=True, help="Serial Port")
+    parser.add_argument('-baudrate', type=int, default=115200, help="Serial Port baudrate")
+    parser.add_argument('-d', '--debug', choices=[0,1,2,3], type=int, default=0, help="set debug out")
+    parser.add_argument('-b', "--backdoor", action="store_true", help="set backdoor debug")
+    args = parser.parse_args()
+
 if __name__ == "__main__":
     asyncio.run(main())
