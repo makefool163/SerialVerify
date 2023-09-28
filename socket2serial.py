@@ -4,6 +4,7 @@ from __future__ import absolute_import, print_function
 import asyncio
 import struct
 import argparse
+import socket
 
 # 1    控制命令
 # 1.1  连接服务器
@@ -18,6 +19,7 @@ class Socket_Forward_Serial_Base:
     def __init__ (self, serial, gui_debug=None):
         self.gui_debug = gui_debug
         self.serial = serial
+        print (serial)
         self.readers = {}
         self.writers = {}
     def Start(self):
@@ -26,13 +28,15 @@ class Socket_Forward_Serial_Base:
         pass
     async def net_recv(self, svr_port, clt_port):
         # 此协程是有新的连接时，才启动
+        print ("net_recv ", svr_port, clt_port)
         sc_pack = struct.pack("=II", svr_port, clt_port)
         while True:
             try:
-                d = self.readers[(svr_port, clt_port)].read(8*1024)
+                d = await self.readers[(svr_port, clt_port)].read(8*1024)
             except Exception as e:
                 break
             if len(d) > 0:
+                print ("recv ", len(d))
                 if self.gui_debug != None:
                     self.gui_debug ('r', str(clt_port)+"\t"+str(len(d)))
                 await self.serial.write(b"\x00" +sc_pack +d)
@@ -55,10 +59,13 @@ class Socket_Forward_Serial_Base:
                     self.gui_debug ('w', str(clt_port) + "\t" +str(len(buf[5:])))
                 await self.writers[(svr_port, clt_port)].write (buf[5:])
             elif idx == 2:
+                # 不论是服务器、还是客户端，都可能从com收到要求断开信号
                 self.writers[(svr_port, clt_port)].close()
                 del self.writers[(svr_port, clt_port)]
                 del self.readers[(svr_port, clt_port)]
             elif idx == 1:
+                # 只有服务器端，才可能从com收到请求连接的信号
+                print ("com_recv idx==1", svr_port, clt_port)
                 try:
                     reader, writer = await asyncio.open_connection('localhost', svr_port)
                     self.writers[(svr_port, clt_port)] = writer
@@ -75,20 +82,31 @@ class Socket_Forward_Serial_Client(Socket_Forward_Serial_Base):
         self.port_offset = port_offset
         self.servers = {}
     async def server_listen(self, reader, writer):
-        client_info = writer.get_extra_info('peername')
-        clt_port = client_info[1]
-        svr_port = reader.get_extra_info('server_port')
+        _, svr_port = writer.get_extra_info('sockname')
+        _, clt_port = writer.get_extra_info('peername')
         svr_port = svr_port - self.port_offset
         self.readers[(svr_port, clt_port)] = reader
         self.writers[(svr_port, clt_port)] = writer
+        # 通知对端，新连接来了
+        sc_pack = struct.pack("=II", svr_port, clt_port)
+        self.serial.write(b"\x01" +sc_pack)
+        asyncio.create_task(self.net_recv(svr_port, clt_port))        
+        print ("had server_listen ", svr_port, clt_port)
     async def Start_Server(self):
-        loop = asyncio.get_running_loop()
         for port in self.ports:
-            #self.servers[port] = await asyncio.start_server(self.server_listen, 'localhost', port)
-            self.servers[port] = \
-                loop.create_server \
-                    (lambda: asyncio.StreamReaderProtocol(asyncio.coroutine(self.server_listen)), \
-                    'localhost', port, server_factory=MyServer)
+            server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            # 启动alive探测
+            server_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 20)
+            # 空闲时间    
+            server_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 3)
+            # 探测间隔
+            server_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+            # 探测次数
+            server_sock.bind (("localhost", port))
+            server_sock.listen()
+            self.servers[port] = await asyncio.start_server(self.server_listen, 
+                                                            sock=server_sock)
     def Start(self):
         super().Start()
         # 由于 Start 必须马上返回，所以不能是协程
@@ -97,15 +115,6 @@ class Socket_Forward_Serial_Client(Socket_Forward_Serial_Base):
     def Stop(self):
         for k in self.writers:
             self.writers[k].close()
-
-import asyncio
-import socketserver
-import socket
-
-class MyServer(socketserver.TCPServer):
-    def __init__(self, server_address, RequestHandlerClass, bind_and_activate=True):
-        socketserver.TCPServer.__init__(self, server_address, RequestHandlerClass, bind_and_activate=bind_and_activate)
-        self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 20)
 
 async def main():
     parser = argparse.ArgumentParser(description="Forward socket service to another computer via a serial port.")

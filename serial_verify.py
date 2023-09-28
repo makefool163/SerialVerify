@@ -91,6 +91,7 @@ class serial_verify:
         如果串口正忙的话，该调用会被阻塞直到允许数据发送
         """
         async with self.write_lock:
+            print ("sver class write", buf)
             while len(self.send_bufs) > 0:
                 # 前面的数据还没有处理完成，就不执行下面的，保持阻塞状态
                 await asyncio.sleep(0.1)
@@ -115,6 +116,7 @@ class serial_verify:
             f_head = struct.pack("=BH", idx, buf_len)
             self.send_bufs[0][0] = f_head +self.send_bufs[0][0]
             #print ("serial_verify write F_idx", idx)
+            print ("sver class write", buf)
 
     async def read(self, block=True):
         """
