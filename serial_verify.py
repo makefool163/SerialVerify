@@ -145,9 +145,9 @@ class serial_verify:
             return None
         async with self.read_lock:
             ret = read_sub(self)
-            while type(ret) == type(None) and block:
-                ret = read_sub(self)
+            while ret == None and block:
                 await asyncio.sleep(0.1)
+                ret = read_sub(self)
                 # 用事件循环 阻塞一下
             return ret
 

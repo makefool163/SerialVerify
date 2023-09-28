@@ -133,7 +133,7 @@ class GuiS2SApp:
             self.btServer['text'] = "Run as Server"
             self.btClient['state'] = "normal"
             self.ss.Stop()
-
+      
     def runC_click(self, event=None):
         print ("Run as Client")
         if self.btClient['text'] == "Run as Client":
@@ -157,7 +157,7 @@ class GuiS2SApp:
                 port_offset=10000, \
                 gui_debug=self.gui_debug \
                 )
-            self.ss.Start(ConsoleMode=False)
+            self.ss.Start()
         else:
             self.btClient['text'] = "Run as Client"
             self.btServer['state'] = "normal"
@@ -188,8 +188,9 @@ class GuiS2SApp:
         self.cmbox_IP["values"] = " ".join(ips)
         self.cmbox_IP.current(0)
         com_ports = list(port_list.comports())
+        com_ports.reverse()
         com_devices = [i.device for i in com_ports]
-        com_description = [i.description for i in com_ports]
+        com_description = [i.description for i in com_ports]        
         self.com_ports = dict(zip(com_description, com_devices))
         self.cmbox_COM['value'] = com_description
         self.cmbox_COM.current(0)

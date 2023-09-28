@@ -35,24 +35,25 @@ class Socket_Forward_Serial_Base:
             if len(d) > 0:
                 if self.gui_debug != None:
                     self.gui_debug ('r', str(clt_port)+"\t"+str(len(d)))
-                self.serial.write(b"\x00" +sc_pack +d)
+                await self.serial.write(b"\x00" +sc_pack +d)
                 # 这个是阻塞的
             else:
                 # 网络已断开，需要打扫现场，并告知对端
                 self.writers[(svr_port, clt_port)].close()
                 del self.writers[(svr_port, clt_port)]
                 del self.readers[(svr_port, clt_port)]
-                self.serial.write(b"\x02" +sc_pack)
+                await self.serial.write(b"\x02" +sc_pack)
     async def com_recv(self):
         while True:
             # 这个是阻塞的
-            buf = self.serial.read()
+            buf = await self.serial.read()
+            print ("com_recv ", len(buf))
             idx, svr_port, clt_port = struct.unpack("=BII", buf[:5])
             sc_pack = buf[1:5]
             if idx == 0:
                 if self.gui_debug != None:
                     self.gui_debug ('w', str(clt_port) + "\t" +str(len(buf[5:])))
-                self.writers[(svr_port, clt_port)].write (buf[5:])
+                await self.writers[(svr_port, clt_port)].write (buf[5:])
             elif idx == 2:
                 self.writers[(svr_port, clt_port)].close()
                 del self.writers[(svr_port, clt_port)]
@@ -65,7 +66,7 @@ class Socket_Forward_Serial_Base:
                     asyncio.create_task(self.net_recv(svr_port, clt_port))
                 except Exception as e:
                     # 不能连接服务，告诉对方网络已断开
-                    self.serial.write (b"\x02" + sc_pack)
+                    await self.serial.write (b"\x02" + sc_pack)
 
 class Socket_Forward_Serial_Client(Socket_Forward_Serial_Base):
     def __init__(self, serial, ports, port_offset=40000, gui_debug=False):
@@ -80,10 +81,31 @@ class Socket_Forward_Serial_Client(Socket_Forward_Serial_Base):
         svr_port = svr_port - self.port_offset
         self.readers[(svr_port, clt_port)] = reader
         self.writers[(svr_port, clt_port)] = writer
-    async def Start(self):
-        super().Start()
+    async def Start_Server(self):
+        loop = asyncio.get_running_loop()
         for port in self.ports:
-            self.servers[port] = await asyncio.start_server(self.server_listen, 'localhost', port)
+            #self.servers[port] = await asyncio.start_server(self.server_listen, 'localhost', port)
+            self.servers[port] = \
+                loop.create_server \
+                    (lambda: asyncio.StreamReaderProtocol(asyncio.coroutine(self.server_listen)), \
+                    'localhost', port, server_factory=MyServer)
+    def Start(self):
+        super().Start()
+        # 由于 Start 必须马上返回，所以不能是协程
+        # 服务器的启动只好放到另一个协程中去实现了
+        asyncio.create_task(self.Start_Server())
+    def Stop(self):
+        for k in self.writers:
+            self.writers[k].close()
+
+import asyncio
+import socketserver
+import socket
+
+class MyServer(socketserver.TCPServer):
+    def __init__(self, server_address, RequestHandlerClass, bind_and_activate=True):
+        socketserver.TCPServer.__init__(self, server_address, RequestHandlerClass, bind_and_activate=bind_and_activate)
+        self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 20)
 
 async def main():
     parser = argparse.ArgumentParser(description="Forward socket service to another computer via a serial port.")
