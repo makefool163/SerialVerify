@@ -5,6 +5,7 @@ import asyncio
 import struct
 import argparse
 import socket
+import serial_verify
 
 # 1    控制命令
 # 1.1  连接服务器
@@ -16,43 +17,46 @@ import socket
 #      XX XX 服务器端口号
 #      YY YY 客户端端口号
 class Socket_Forward_Serial_Base:
-    def __init__ (self, serial, gui_debug=None):
+    def __init__ (self, serial: serial_verify.serial_verify, gui_debug=None):
         self.gui_debug = gui_debug
         self.serial = serial
         print (serial)
         self.readers = {}
         self.writers = {}
     def Start(self):
-        asyncio.create_task(self.com_recv())
+        self.serial.Start()
+        self.com_recv_task = asyncio.create_task(self.com_recv())
     def Stop(self):
-        pass
+        self.serial.Stop()
+        self.com_recv_task.cancel()
     async def net_recv(self, svr_port, clt_port):
         # 此协程是有新的连接时，才启动
         print ("net_recv ", svr_port, clt_port)
-        sc_pack = struct.pack("=II", svr_port, clt_port)
+        sc_pack = struct.pack("=HH", svr_port, clt_port)
         while True:
             try:
                 d = await self.readers[(svr_port, clt_port)].read(8*1024)
             except Exception as e:
                 break
             if len(d) > 0:
-                print ("recv ", len(d))
+                print ("net_recv len(d) ", len(d))
                 if self.gui_debug != None:
                     self.gui_debug ('r', str(clt_port)+"\t"+str(len(d)))
                 await self.serial.write(b"\x00" +sc_pack +d)
                 # 这个是阻塞的
             else:
                 # 网络已断开，需要打扫现场，并告知对端
-                self.writers[(svr_port, clt_port)].close()
-                del self.writers[(svr_port, clt_port)]
-                del self.readers[(svr_port, clt_port)]
+                if (svr_port, clt_port) in self.writers:
+                    self.writers[(svr_port, clt_port)].close()
+                    del self.writers[(svr_port, clt_port)]
+                    del self.readers[(svr_port, clt_port)]
                 await self.serial.write(b"\x02" +sc_pack)
     async def com_recv(self):
         while True:
             # 这个是阻塞的
             buf = await self.serial.read()
             print ("com_recv ", len(buf))
-            idx, svr_port, clt_port = struct.unpack("=BII", buf[:5])
+            idx, svr_port, clt_port = struct.unpack("=BHH", buf[:5])
             sc_pack = buf[1:5]
             if idx == 0:
                 if self.gui_debug != None:
@@ -70,6 +74,7 @@ class Socket_Forward_Serial_Base:
                     reader, writer = await asyncio.open_connection('localhost', svr_port)
                     self.writers[(svr_port, clt_port)] = writer
                     self.readers[(svr_port, clt_port)] = reader
+                    print ("openconnect", svr_port, clt_port)
                     asyncio.create_task(self.net_recv(svr_port, clt_port))
                 except Exception as e:
                     # 不能连接服务，告诉对方网络已断开
@@ -88,8 +93,8 @@ class Socket_Forward_Serial_Client(Socket_Forward_Serial_Base):
         self.readers[(svr_port, clt_port)] = reader
         self.writers[(svr_port, clt_port)] = writer
         # 通知对端，新连接来了
-        sc_pack = struct.pack("=II", svr_port, clt_port)
-        self.serial.write(b"\x01" +sc_pack)
+        sc_pack = struct.pack("=HH", svr_port, clt_port)
+        await self.serial.write(b"\x01" +sc_pack)
         asyncio.create_task(self.net_recv(svr_port, clt_port))        
         print ("had server_listen ", svr_port, clt_port)
     async def Start_Server(self):
@@ -115,6 +120,12 @@ class Socket_Forward_Serial_Client(Socket_Forward_Serial_Base):
     def Stop(self):
         for k in self.writers:
             self.writers[k].close()
+        for k in self.servers:
+            self.servers[k].close()
+        self.writers = {}
+        self.readers = {}
+        self.servers = {}
+        super().Stop()
 
 async def main():
     parser = argparse.ArgumentParser(description="Forward socket service to another computer via a serial port.")

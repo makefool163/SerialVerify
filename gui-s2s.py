@@ -5,12 +5,14 @@ from __future__ import absolute_import, print_function
 # pygubu-designer
 # pip install pygubu-designer
 
-from socket2serial import Socket_Forward_Serial_Client, Socket_Forward_Serial_Base
+import socket2serial
 import serial_verify
 import serial.tools.list_ports as port_list
+import importlib
 import os
 import socket
 import asyncio
+
 os.environ['PYTHONASYNCIODEBUG'] = '1'
 
 #!/usr/bin/python3
@@ -122,9 +124,10 @@ class GuiS2SApp:
             log_file = None
             self.com_server = serial_verify.serial_verify\
                 (com_port = COM_Name, \
-                baud_rate = int(self.cmbox_bdrate.get())\
+                baud_rate = int(self.cmbox_bdrate.get()),\
+                call_name= "Server"
                 )
-            self.ss = Socket_Forward_Serial_Base\
+            self.ss = socket2serial.Socket_Forward_Serial_Base\
                 (serial=self.com_server, \
                 gui_debug=self.gui_debug \
                 )
@@ -133,6 +136,8 @@ class GuiS2SApp:
             self.btServer['text'] = "Run as Server"
             self.btClient['state'] = "normal"
             self.ss.Stop()
+            importlib.reload(serial_verify)
+            importlib.reload(socket2serial)
       
     def runC_click(self, event=None):
         print ("Run as Client")
@@ -149,9 +154,10 @@ class GuiS2SApp:
             log_file = None
             self.com_client = serial_verify.serial_verify\
                 (com_port = COM_Name, \
-                baud_rate = int(self.cmbox_bdrate.get())\
+                baud_rate = int(self.cmbox_bdrate.get()),\
+                call_name= "Client"
                 )
-            self.ss = Socket_Forward_Serial_Client\
+            self.ss = socket2serial.Socket_Forward_Serial_Client\
                 (serial=self.com_client, \
                 ports=[self.intPortC.get()], \
                 port_offset=10000, \
@@ -162,6 +168,8 @@ class GuiS2SApp:
             self.btClient['text'] = "Run as Client"
             self.btServer['state'] = "normal"
             self.ss.Stop()
+            importlib.reload(serial_verify)
+            importlib.reload(socket2serial)
 
     def gui_debug(self, SC, inStr):
         if SC == "r":

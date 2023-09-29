@@ -60,17 +60,28 @@ class serial_verify:
         self.send_bufs = {}
         self.send_bufs_len = 0
         self.recv_bufs  = {}
+        self.recv_Queue = asyncio.queues.Queue()
         self.Stop_Sign = False
         self.write_lock = asyncio.Lock()
         self.read_lock = asyncio.Lock()
         self.watch_dog = time.time()
 
     def Start(self):
-        asyncio.create_task(self.Watch_Dog())
-        asyncio.create_task(self.Com_Write())
-        asyncio.create_task(self.Com_Read())
+        self.watch_dog_task = asyncio.create_task(self.Watch_Dog())
+        self.com_write_task = asyncio.create_task(self.Com_Write())
+        self.com_read_task  = asyncio.create_task(self.Com_Read())
+
+    def Stop(self):
+        try:
+            self.watch_dog_task.cancel()
+            self.com_write_task.cancel()
+            self.com_read_task.cancel()
+            self.com.close()
+        except Exception as e:
+            print ("Stop Error ", e)
 
     def __del__(self):
+        self.Stop()
         self.com.close()
 
     async def Watch_Dog(self):
@@ -91,7 +102,7 @@ class serial_verify:
         如果串口正忙的话，该调用会被阻塞直到允许数据发送
         """
         async with self.write_lock:
-            print ("sver class write", buf)
+            print (self.call_name, "serial_verify class write", buf)
             while len(self.send_bufs) > 0:
                 # 前面的数据还没有处理完成，就不执行下面的，保持阻塞状态
                 await asyncio.sleep(0.1)
@@ -116,42 +127,14 @@ class serial_verify:
             f_head = struct.pack("=BH", idx, buf_len)
             self.send_bufs[0][0] = f_head +self.send_bufs[0][0]
             #print ("serial_verify write F_idx", idx)
-            print ("sver class write", buf)
+            #print ("sver class write", buf)
 
-    async def read(self, block=True):
+    async def read(self):
         """
         读串口调用
-        选阻塞模式时，将阻塞直至有返回值
-        非阻塞模式时，若返回值，则返回None
-        返回值是((tagA, tagB), ret_data) 这样的形式
-        如果串口已经收到了多组数据，本调用仅返回其中一组数据
+        将阻塞直至有返回值
         """
-        def read_sub(self):
-            #print ("self.recv_bufs", self.recv_bufs)
-            #print ("                     self.recv_idx", self.recv_idx, len(self.recv_bufs[k]))
-            if 0 in self.recv_bufs:
-                f_idx_len, f_buf_len = \
-                    struct.unpack("=BH",self.recv_bufs[0][:3])
-                if len(self.recv_bufs) == f_idx_len:
-                    #print ("serial_verify read already")
-                    ids = list(self.recv_bufs.keys())
-                    ids.sort()
-                    oStr = b""
-                    for i in ids:
-                        if i == 0:
-                            oStr = self.recv_bufs[i][3:]
-                        else:
-                            oStr += self.recv_bufs[i]
-                    del self.recv_bufs[i]
-                    return (oStr)
-            return None
-        async with self.read_lock:
-            ret = read_sub(self)
-            while ret == None and block:
-                await asyncio.sleep(0.1)
-                ret = read_sub(self)
-                # 用事件循环 阻塞一下
-            return ret
+        return self.recv_Queue.get()
 
     async def Com_Write(self):
         """
@@ -329,9 +312,26 @@ class serial_verify:
                             confirm_Str += struct.pack("=B", f_idx) + b"\xAA\xAA"
                             self.confirm_Queue.put (confirm_Str)
                             #self.confirm_Queue.put (confirm_Str)
-                            #print (self.call_name, "Recv Right ", tgA, tgB, f_idx)
+                            print (self.call_name, "Recv Right ", f_idx)
+                            # 此处要检查一下 self.recv_bufs 是不是全部接收完了
+                            # 若已接收完成，则要准备收下一组数据，否则下一组数据就会
+                            # 把已接收的数据冲毁
+                            if 0 in self.recv_bufs:
+                                f_idx_len, f_buf_len = \
+                                    struct.unpack("=BH",self.recv_bufs[0][:3])
+                                if len(self.recv_bufs) == f_idx_len:
+                                    #print ("serial_verify read already")
+                                    ids = list(self.recv_bufs.keys())
+                                    ids.sort()
+                                    oStr = b""
+                                    for i in ids:
+                                        if i == 0:
+                                            oStr = self.recv_bufs[i][3:]
+                                        else:
+                                            oStr += self.recv_bufs[i]
+                                        del self.recv_bufs[i]
+                                    self.recv_Queue.put(oStr)
                         d = d[i +12 +f_len: ]
-                        # 确认帧 要连发两次
                     else:
                         print (self.call_name, "Recv Fail  ", f_idx)
                         # 没有找到，只好跳过这个帧头，继续找下一帧了
@@ -402,7 +402,8 @@ def multiP_main():
     stop_sign = multiprocessing.Manager().Value("i", 0)
     #stop_sign = multiprocessing.RLock()
     ret_Q = multiprocessing.Queue()
-    b1 = os.urandom(8*1024)
+    #b1 = os.urandom(8*1024)
+    b1 = os.urandom(1000)
 
     send_proc = multiprocessing.Process(target=send, \
                     args=(baud_rate, "COM5", stop_sign, b1,),daemon=True)
