@@ -15,12 +15,12 @@ import multiprocessing
 
 #os.environ['PYTHONASYNCIODEBUG'] = '1'
 
-def print_hex(buf, f):
+def print_hex(buf, f="-"):
     # 把输入的 bytes 打印成 16进制形式
     hex = ''
     for b in buf:
         hex += f + format(b, '02x')
-    print (hex)
+    return hex
 
 crc32_func = crcmod.mkCrcFun(0x104c11db7, initCrc=0, xorOut=0xFFFFFFFF)
 
@@ -93,6 +93,7 @@ class serial_verify:
         while True:
             await asyncio.sleep(dog_sleep_time)
             if time.time() - self.watch_dog > dog_sleep_time:
+                print ("WATCH DOG ! WATCH DOG !!!")
                 self.com.close()
                 self.com.open()
 
@@ -102,7 +103,7 @@ class serial_verify:
         如果串口正忙的话，该调用会被阻塞直到允许数据发送
         """
         async with self.write_lock:
-            print (self.call_name, "serial_verify class write", buf)
+            #print (self.call_name, "serial_verify class write", buf)
             while len(self.send_bufs) > 0:
                 # 前面的数据还没有处理完成，就不执行下面的，保持阻塞状态
                 await asyncio.sleep(0.1)
@@ -112,19 +113,20 @@ class serial_verify:
             buf_len = len(buf)
             while len(buf) > 0:
                 if idx == 0:
-                    self.send_bufs[idx] = [buf[:0x1024 - 3], 0]
+                    self.send_bufs[idx] = [buf[:1024 - 3], 0]
                     # 第一帧的 第  1 个字节为总帧数
                     # 第一帧的 第2、3个字节为总帧数
-                    buf = buf[0x1024 - 3:]
+                    buf = buf[1024 - 3:]
                 else:
-                    self.send_bufs[idx] = [buf[:0x1024], 0]
+                    self.send_bufs[idx] = [buf[:1024], 0]
                     # 前一个元素是 数据 本身，后一个 用来标识 是否已发送过
-                    buf = buf[0x1024:]
+                    buf = buf[1024:]
                 idx += 1
             self.send_bufs_len = idx
             self.confirm_timeout_const = 100 * idx * 1024 * 10.0 / self.baud_rate
             #self.confirm_timeout_const = 0.8
             f_head = struct.pack("=BH", idx, buf_len)
+            print (self.call_name, "serial_verify class write", idx, buf_len)
             self.send_bufs[0][0] = f_head +self.send_bufs[0][0]
             #print ("serial_verify write F_idx", idx)
             #print ("sver class write", buf)
@@ -134,7 +136,7 @@ class serial_verify:
         读串口调用
         将阻塞直至有返回值
         """
-        return self.recv_Queue.get()
+        return (await self.recv_Queue.get())
 
     async def Com_Write(self):
         """
@@ -148,6 +150,7 @@ class serial_verify:
             f_len = len(buf)
             oStr  = b"\x55\x55\x55"
             oStr += struct.pack("=HB", f_len, i)
+            #print (self.call_name, "asm frame", f_len, i)
             oStr += buf
             cc = crc32_func(oStr)
             oStr += struct.pack("=I", cc)
@@ -162,15 +165,15 @@ class serial_verify:
         while True:
             if self.Stop_Sign:
                 break
+            # 把cpu 还给事件循环
+            await asyncio.sleep(0)
+
             # 1、接受确认帧
             #print ("Com_Write confirm write")
             while True:
                 try:
                     buf = self.confirm_Queue.get(block=False)
-                    #print_hex(buf, "-")
                     self.com.write(buf)
-                    #print (self.call_name, "confirm_Frame com.write", end="")
-                    #print_hex (buf, "-")
                 except queue.Empty:
                     break
 
@@ -194,7 +197,7 @@ class serial_verify:
                     continue
                 time_out = self.confirm_timeout_const + time.time()
                 self.send_bufs[i][1] = time_out
-                print (self.call_name, "Send Missing Frame com.write", i, l, len(ids))
+                print (self.call_name, "Send Missing Frame re_send com.write", i, l, len(re_send))
                 #await asyncio.sleep(self.One_Frame_time_out *100)
 
             # 3、补发 超时帧
@@ -230,7 +233,7 @@ class serial_verify:
                     time_out = self.confirm_timeout_const + time.time()
                     self.send_bufs[i][1] = time_out
                     #print ("Send Missing Frame com.write", l, end="")
-                    print (self.call_name, "Send Missing Frame com.write", i, l, len(ids))
+                    print (self.call_name, "Send Missing Frame timeout com.write", i, l, len(k))
                     #print_hex(oStr, "-")
 
             # 4、发送一个未发的数据帧
@@ -245,13 +248,11 @@ class serial_verify:
                 l = self.com.write(oStr)
                 while self.com.out_waiting > 0:
                     await asyncio.sleep(0.01)
-                #print (self.call_name, "Send Normal Frame com.write", ids[0], l)
+                print (self.call_name, "Send Normal Frame com.write", ids[0], l)
                 #print_hex(oStr, "-")
                 time_out = self.confirm_timeout_const + time.time()
                 self.send_bufs[ids[0]][1] = time_out # 超时的时间点
             # 只发一个正常的数据帧
-            await asyncio.sleep(0.1)
-            # 把cpu 还给事件循环
 
     async def Com_Read(self):
         """
@@ -259,21 +260,18 @@ class serial_verify:
         需要用 task 来启动
         # 55 55 55 L1 L2 ZZ ... C1 C2 C3 C4 AA AA
         """
-        #print (self.call_name, "Com_Read Enter.")
-        #await asyncio.sleep(0.1)
         d = b""
         while True:
             if self.Stop_Sign:
                 break
             while self.com.in_waiting == 0:
                 # 没有数据缓冲，可以切换出去了
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0)
             in_buf = self.com.read(self.com.in_waiting)
             #print (self.call_name, "Com_Read from Buf", end="")
             #print_hex (in_buf, "-")
             d += in_buf
-            #print (self.call_name, " Com_Work_Read d +++++++++++++ ", end="")
-            #print_hex (d, "-")            
+            #print (self.call_name, " Com_Work_Read d +++++++++++++ ", print_hex (d[-20:]))
             # 找 第一个 55 AA 帧同步字
             # 55 55 55 L1 L2 ZZ ... C1 C2 C3 C4 AA AA
             match = re.search(b"\x55\x55\x55", d)
@@ -284,14 +282,16 @@ class serial_verify:
                 frame_head = d[i:i +6]
                 f_len = 0
                 f_len, f_idx = struct.unpack ("=xxxHB", frame_head)
-                #print ("f_len, f_idx ", f_len, f_idx, len(d[i:]))
+                #print (self.call_name, "f_len, f_idx ", f_len, f_idx, len(d[i:]), i, print_hex (d[i:i +8]))
+                #print_hex (d[i:i +8])
 
                 if f_len == 0xAAAA \
-                    and len(d) >= i +8 and d[i +6: i +8] != b"\xAA\xAA":
+                and len(d) >= i +8 \
+                and d[i +6: i +8] == b"\xAA\xAA":
                     # 接收确认帧
                     # 55 55 55 AA AA ZZ AA AA
                     # 确认帧如果出错的话，通信就岌岌可危了
-                    #print (self.call_name, "Recv Confirm Frame Test ", f_idx)
+                    print (self.call_name, "Recv Confirm Frame ", f_idx)
                     # 接收确认帧 无误，处理发送缓冲
                     if f_idx in self.send_bufs:
                         del self.send_bufs[f_idx]
@@ -330,7 +330,7 @@ class serial_verify:
                                         else:
                                             oStr += self.recv_bufs[i]
                                         del self.recv_bufs[i]
-                                    self.recv_Queue.put(oStr)
+                                    await self.recv_Queue.put(oStr)
                         d = d[i +12 +f_len: ]
                     else:
                         print (self.call_name, "Recv Fail  ", f_idx)
@@ -341,11 +341,11 @@ import os
 
 async def main():
     #baud_rate = 600
-    #baud_rate = 115200
-    baud_rate = 921600
-    baud_rate = 6000000
-    C1 = serial_verify("COM4", baud_rate, "AA")
-    C2 = serial_verify("COM3", baud_rate, "BB")
+    baud_rate = 115200
+    #baud_rate = 921600
+    #baud_rate = 6000000
+    C1 = serial_verify("COM5", baud_rate, "AA")
+    C2 = serial_verify("COM6", baud_rate, "BB")
 
     C1.Start()
     C2.Start()
@@ -354,7 +354,7 @@ async def main():
     #b1 = os.urandom(64)
     print_hex (b1[:10], "-")
     await C1.write(b1)
-    b2 = await C2.read(block=True)
+    b2 = await C2.read()
     C1.Stop_Sign = True
     C2.Stop_Sign = True
     print (b1[:50])
@@ -365,57 +365,73 @@ async def main():
         print ("Fail")
     await asyncio.sleep(1)
 
-async def send_main(baud_rate, com_port, stop_sign, buf):
+async def main1(baud_rate, com_port, stop_sign, buf):
     C1 = serial_verify(com_port, baud_rate, "AA")
     C1.Start()
     await C1.write(buf)
-    while stop_sign.value == 0:
+    b1 = await C1.read()
+    print ("C1", len(b1), b1[:30])
+    stop_sign.value = stop_sign.value +1
+
+    while stop_sign.value < 2:
         await asyncio.sleep(1)
+
     C1.Stop_Sign = True
     await asyncio.sleep(2)
+    return b1
 
-def send(baud_rate, com_port, stop_sign, buf):
-    asyncio.run(send_main(baud_rate, com_port, stop_sign, buf))
+def C1(baud_rate, com_port, stop_sign, buf, ret_Q):
+    ret = asyncio.run(main1(baud_rate, com_port, stop_sign, buf))
+    ret_Q.put(("C1", ret))
     
-async def recv_main(baud_rate, com_port, stop_sign):
+async def main2(baud_rate, com_port, stop_sign, buf):
     C2 = serial_verify(com_port, baud_rate, "BB")
     C2.Start()
-    b2 = await C2.read(block=True)
-    print (b2[:30])
-    stop_sign.value = 1
+    await C2.write(buf)
+    b2 = await C2.read()
+    print ("C2", len(b2), b2[:30])
+    stop_sign.value = stop_sign.value +1
+
+    while stop_sign.value < 2:
+        await asyncio.sleep(1)
+
     C2.Stop_Sign = True
     await asyncio.sleep(2)
     return b2
 
-def recv(baud_rate, com_port, stop_sign, ret_Q):
-    ret = asyncio.run(recv_main(baud_rate, com_port, stop_sign))
+def C2(baud_rate, com_port, stop_sign, buf, ret_Q):
+    ret = asyncio.run(main2(baud_rate, com_port, stop_sign, buf))
     print (ret[:30])
-    ret_Q.put(ret)
+    ret_Q.put(("C2",ret))
 
 def multiP_main():
-    baud_rate = 9600
     baud_rate = 1200
+    baud_rate = 9600
     #baud_rate = 115200
     #baud_rate = 460800
-    baud_rate = 1000000
+    #baud_rate = 1000000
     #baud_rate = 6000000
     stop_sign = multiprocessing.Manager().Value("i", 0)
     #stop_sign = multiprocessing.RLock()
     ret_Q = multiprocessing.Queue()
     #b1 = os.urandom(8*1024)
-    b1 = os.urandom(1000)
+    b1 = os.urandom(1000*8)
+    b2 = os.urandom(2000*4)
 
-    send_proc = multiprocessing.Process(target=send, \
-                    args=(baud_rate, "COM5", stop_sign, b1,),daemon=True)
-    recv_proc = multiprocessing.Process(target=recv, \
-                    args=(baud_rate, "COM6", stop_sign,ret_Q),daemon=True)
-    recv_proc.start()
-    send_proc.start()
+    C1_proc = multiprocessing.Process(target=C1, \
+                    args=(baud_rate, "COM5", stop_sign, b1, ret_Q),daemon=True)
+    C2_proc = multiprocessing.Process(target=C2, \
+                    args=(baud_rate, "COM6", stop_sign, b2, ret_Q),daemon=True)
+    C1_proc.start()
+    C2_proc.start()
     #recv_proc.join()
     #send_proc.join()
 
-    b2 = ret_Q.get(block=True)
-    if b1 == b2:
+    z1, d1 = ret_Q.get()
+    z2, d2 = ret_Q.get()
+    if z1 == "C1":
+        d1, d2 = d2, d1
+    if b1 == d1 and b2 == d2:
         print ("OK") 
     else:
         print ("Fail")
@@ -424,5 +440,6 @@ if __name__ == "__main__":
     #asyncio.run(main())
     #multiP_main()
     N = 1
-    t = timeit.timeit(multiP_main, number=N)
+    #t = timeit.timeit(multiP_main, number=N)
+    t = timeit.timeit(asyncio.run(main()), number=N)
     print ("sum_time", t, t/N)

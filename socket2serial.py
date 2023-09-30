@@ -31,7 +31,7 @@ class Socket_Forward_Serial_Base:
         self.com_recv_task.cancel()
     async def net_recv(self, svr_port, clt_port):
         # 此协程是有新的连接时，才启动
-        print ("net_recv ", svr_port, clt_port)
+        #print ("net_recv ", svr_port, clt_port)
         sc_pack = struct.pack("=HH", svr_port, clt_port)
         while True:
             try:
@@ -39,7 +39,7 @@ class Socket_Forward_Serial_Base:
             except Exception as e:
                 break
             if len(d) > 0:
-                print ("net_recv len(d) ", len(d))
+                #print ("net_recv len(d) ", len(d))
                 if self.gui_debug != None:
                     self.gui_debug ('r', str(clt_port)+"\t"+str(len(d)))
                 await self.serial.write(b"\x00" +sc_pack +d)
