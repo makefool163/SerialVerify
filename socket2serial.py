@@ -39,7 +39,7 @@ class Socket_Forward_Serial_Base:
             except Exception as e:
                 break
             if len(d) > 0:
-                #print ("net_recv len(d) ", len(d))
+                print ("net_recv len(d) ", len(d))
                 if self.gui_debug != None:
                     self.gui_debug ('r', str(clt_port)+"\t"+str(len(d)))
                 await self.serial.write(b"\x00" +sc_pack +d)

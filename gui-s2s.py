@@ -136,6 +136,8 @@ class GuiS2SApp:
             self.btServer['text'] = "Run as Server"
             self.btClient['state'] = "normal"
             self.ss.Stop()
+            del self.com_client
+            del self.ss
             importlib.reload(serial_verify)
             importlib.reload(socket2serial)
       
@@ -168,6 +170,8 @@ class GuiS2SApp:
             self.btClient['text'] = "Run as Client"
             self.btServer['state'] = "normal"
             self.ss.Stop()
+            del self.com_client
+            del self.ss
             importlib.reload(serial_verify)
             importlib.reload(socket2serial)
 
