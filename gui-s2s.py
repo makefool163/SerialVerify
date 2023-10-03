@@ -13,7 +13,7 @@ import os
 import socket
 import asyncio
 
-os.environ['PYTHONASYNCIODEBUG'] = '1'
+#os.environ['PYTHONASYNCIODEBUG'] = '1'
 
 #!/usr/bin/python3
 import tkinter as tk
@@ -136,7 +136,7 @@ class GuiS2SApp:
             self.btServer['text'] = "Run as Server"
             self.btClient['state'] = "normal"
             self.ss.Stop()
-            del self.com_client
+            del self.com_server
             del self.ss
             importlib.reload(serial_verify)
             importlib.reload(socket2serial)

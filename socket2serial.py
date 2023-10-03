@@ -24,7 +24,7 @@ class Socket_Forward_Serial_Base:
         self.readers = {}
         self.writers = {}
     def Start(self):
-        self.serial.Start()
+        asyncio.create_task(self.serial.Start())
         self.com_recv_task = asyncio.create_task(self.com_recv())
     def Stop(self):
         self.serial.Stop()
@@ -39,7 +39,7 @@ class Socket_Forward_Serial_Base:
             except Exception as e:
                 break
             if len(d) > 0:
-                print ("net_recv len(d) ", len(d))
+                #print ("net_recv len(d) ", len(d))
                 if self.gui_debug != None:
                     self.gui_debug ('r', str(clt_port)+"\t"+str(len(d)))
                 await self.serial.write(b"\x00" +sc_pack +d)
@@ -48,20 +48,31 @@ class Socket_Forward_Serial_Base:
                 # 网络已断开，需要打扫现场，并告知对端
                 if (svr_port, clt_port) in self.writers:
                     self.writers[(svr_port, clt_port)].close()
+                    await self.writers[(svr_port, clt_port)].wait_close()
                     del self.writers[(svr_port, clt_port)]
+                    self.readers[(svr_port, clt_port)].close()
+                    await self.readers[(svr_port, clt_port)].wait_close()
                     del self.readers[(svr_port, clt_port)]
                 await self.serial.write(b"\x02" +sc_pack)
     async def com_recv(self):
         while True:
             # 这个是阻塞的
+            #print ("serial.read...",end=" ", flush=True)
             buf = await self.serial.read()
-            print ("com_recv ", len(buf))
+            #print ("com_recv ", len(buf))
             idx, svr_port, clt_port = struct.unpack("=BHH", buf[:5])
             sc_pack = buf[1:5]
             if idx == 0:
                 if self.gui_debug != None:
                     self.gui_debug ('w', str(clt_port) + "\t" +str(len(buf[5:])))
-                await self.writers[(svr_port, clt_port)].write (buf[5:])
+                """
+                print ("net_send try write", 
+                       svr_port, clt_port, 
+                       self.writers[(svr_port, clt_port)],
+                       len(buf[5:]))
+                """
+                self.writers[(svr_port, clt_port)].write (buf[5:])
+                await self.writers[(svr_port, clt_port)].drain()
             elif idx == 2:
                 # 不论是服务器、还是客户端，都可能从com收到要求断开信号
                 self.writers[(svr_port, clt_port)].close()
@@ -71,11 +82,14 @@ class Socket_Forward_Serial_Base:
                 # 只有服务器端，才可能从com收到请求连接的信号
                 print ("com_recv idx==1", svr_port, clt_port)
                 try:
-                    reader, writer = await asyncio.open_connection('localhost', svr_port)
-                    self.writers[(svr_port, clt_port)] = writer
-                    self.readers[(svr_port, clt_port)] = reader
-                    print ("openconnect", svr_port, clt_port)
-                    asyncio.create_task(self.net_recv(svr_port, clt_port))
+                    print ("openconnect 0", svr_port, clt_port)
+                    if (svr_port, clt_port) not in self.writers:
+                        print ("openconnect 1", svr_port, clt_port)
+                        reader, writer = await asyncio.open_connection('localhost', svr_port)
+                        self.writers[(svr_port, clt_port)] = writer
+                        self.readers[(svr_port, clt_port)] = reader
+                        print ("openconnect 2", svr_port, clt_port)
+                        asyncio.create_task(self.net_recv(svr_port, clt_port))
                 except Exception as e:
                     # 不能连接服务，告诉对方网络已断开
                     await self.serial.write (b"\x02" + sc_pack)
@@ -93,10 +107,10 @@ class Socket_Forward_Serial_Client(Socket_Forward_Serial_Base):
         self.readers[(svr_port, clt_port)] = reader
         self.writers[(svr_port, clt_port)] = writer
         # 通知对端，新连接来了
+        print ("had server_listen ", svr_port, clt_port)
         sc_pack = struct.pack("=HH", svr_port, clt_port)
         await self.serial.write(b"\x01" +sc_pack)
         asyncio.create_task(self.net_recv(svr_port, clt_port))        
-        print ("had server_listen ", svr_port, clt_port)
     async def Start_Server(self):
         for port in self.ports:
             server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

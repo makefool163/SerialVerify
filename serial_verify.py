@@ -1,19 +1,20 @@
 # -*- coding: utf-8 -*-
 from __future__ import absolute_import, print_function
 
-import serial
 import asyncio
 import struct
 import re
 import queue
+import asyncio
+import serial
+import serial_asyncio
 import time
 import os
 
-import timeit
 import crcmod
 import multiprocessing
 
-#os.environ['PYTHONASYNCIODEBUG'] = '1'
+os.environ['PYTHONASYNCIODEBUG'] = '1'
 
 def print_hex(buf, f="-"):
     # 把输入的 bytes 打印成 16进制形式
@@ -23,9 +24,6 @@ def print_hex(buf, f="-"):
     return hex
 
 crc32_func = crcmod.mkCrcFun(0x104c11db7, initCrc=0, xorOut=0xFFFFFFFF)
-
-async def async_sleep():
-    await asyncio.sleep(0)
 
 class serial_verify:
     """
@@ -42,47 +40,47 @@ class serial_verify:
         self.One_Frame_time_out = 0xAA * 10.0 / baud_rate
         # 在write 方法中，会把全部数据发完的时间 重新设置为 超时时间
         self.call_name = call_name
-        self.write_enable = False
         self.baud_rate = baud_rate
         self.com_port = com_port
-        self.com = serial.Serial(port=self.com_port, 
-                                timeout = 0, 
-                                # non-blocking mode, return immediately in any case, 
-                                # returning zero or more, up to the requested number of bytes
-                                baudrate=self.baud_rate,
-                                rtscts=True,
-                                #dsrdtr=True,
-                                # We use hardware stream control here
-                                parity=serial.PARITY_EVEN,
-                                bytesize=serial.EIGHTBITS)
-        self.confirm_Queue = queue.Queue()
-        # 确认帧，不可能重发，如果确认帧都不能保证正确，通信效果就岌岌可危了
-        self.send_bufs = {}
-        self.send_bufs_len = 0
+
         self.recv_bufs  = {}
+        #self.confirm_Queue = queue.Queue()
+        # 确认帧，不可能重发，如果确认帧都不能保证正确，通信效果就岌岌可危了
+        self.send_Queue = queue.Queue()
         self.recv_Queue = asyncio.queues.Queue()
         self.Stop_Sign = False
         self.write_lock = asyncio.Lock()
-        self.read_lock = asyncio.Lock()
         self.watch_dog = time.time()
 
-    def Start(self):
+    async def OpenComm(self):
+        return await \
+            serial_asyncio.open_serial_connection(url=self.com_port,
+                                                  baudrate=self.baud_rate,
+                                                  rtscts=True,
+                                                  parity=serial.PARITY_EVEN,
+                                                  bytesize=serial.EIGHTBITS
+                                                  )
+
+    async def Start(self):
+        self.com_reader, self.com_writer = await self.OpenComm()
         self.watch_dog_task = asyncio.create_task(self.Watch_Dog())
-        self.com_write_task = asyncio.create_task(self.Com_Write())
         self.com_read_task  = asyncio.create_task(self.Com_Read())
+        self.com_write_task = asyncio.create_task(self.Com_Write())
 
     def Stop(self):
         try:
-            self.watch_dog_task.cancel()
             self.com_write_task.cancel()
             self.com_read_task.cancel()
-            self.com.close()
+            self.watch_dog_task.cancel()
+            #self.com_reader.close()
+            self.com_writer.close()
         except Exception as e:
             print ("Stop Error ", e)
 
     def __del__(self):
         self.Stop()
-        self.com.close()
+        #self.com_reader.close()
+        self.com_writer.close()
 
     async def Watch_Dog(self):
         """
@@ -94,42 +92,40 @@ class serial_verify:
             await asyncio.sleep(dog_sleep_time)
             if time.time() - self.watch_dog > dog_sleep_time:
                 print ("WATCH DOG ! WATCH DOG !!!")
-                self.com.close()
-                self.com.open()
+                self.com_reader.close()
+                self.com_reader, self.com_writer = await self.OpenComm()
 
     async def write(self, buf):
         """
         写串口调用
         如果串口正忙的话，该调用会被阻塞直到允许数据发送
         """
-        async with self.write_lock:
-            #print (self.call_name, "serial_verify class write", buf)
-            while len(self.send_bufs) > 0:
-                # 前面的数据还没有处理完成，就不执行下面的，保持阻塞状态
-                await asyncio.sleep(0)
-                #asyncio.run(async_sleep())
-            # 把 输入 组合成 待发送的 数据帧
-            idx = 0
-            buf_len = len(buf)
-            while len(buf) > 0:
-                if idx == 0:
-                    self.send_bufs[idx] = [buf[:1024 - 3], 0]
-                    # 第一帧的 第  1 个字节为总帧数
-                    # 第一帧的 第2、3个字节为总帧数
-                    buf = buf[1024 - 3:]
-                else:
-                    self.send_bufs[idx] = [buf[:1024], 0]
-                    # 前一个元素是 数据 本身，后一个 用来标识 是否已发送过
-                    buf = buf[1024:]
-                idx += 1
-            self.send_bufs_len = idx
-            self.confirm_timeout_const = 100 * idx * 1024 * 10.0 / self.baud_rate
-            #self.confirm_timeout_const = 0.8
-            f_head = struct.pack("=BH", idx, buf_len)
-            print (self.call_name, "serial_verify class write", idx, buf_len)
-            self.send_bufs[0][0] = f_head +self.send_bufs[0][0]
-            #print ("serial_verify write F_idx", idx)
-            #print ("sver class write", buf)
+        await self.write_lock.acquire()
+        # 把 输入 组合成 待发送的 数据帧
+        idx = 0
+        buf_len = len(buf)
+        send_bufs = []
+        #print (self.call_name, "serial_verify class write")
+        while len(buf) > 0:
+            if idx == 0:
+                send_bufs.append([buf[:1024 - 3], idx, 0])
+                # 第一帧的 第  1 个字节为 帧数
+                # 第一帧的 第2、3个字节为 总长度
+                buf = buf[1024 - 3:]
+            else:
+                send_bufs.append([buf[:1024    ], idx, 0])
+                # 前一个元素是 数据 本身，后一个 用来标识 是否已发送过
+                buf = buf[1024:]
+            idx += 1
+        self.confirm_timeout_const = 10 * 1024 * 12.0 / self.baud_rate
+        f_head = struct.pack("=BH", idx, buf_len)
+        send_bufs[0][0] = f_head +send_bufs[0][0]
+
+        for s in send_bufs:
+            self.send_Queue.put(s)
+            # 队列的元素： 原始数据,帧序号,超时时间
+            # 超时时间，用来延时，使接收方能有时间完成接收动作，并返回确认信号
+        #print (self.call_name, "serial_verify class write", idx, buf_len)
 
     async def read(self):
         """
@@ -158,115 +154,42 @@ class serial_verify:
             return oStr
         # 总体的发送优先级
         # 1、接受确认帧
-        # 2、补发数据帧
-        # 3、正常数据帧
-        #print (self.call_name, "Com_Write Enter.")
+        # 2、数据帧（正常、补发），从send_Queue队列中取
+        print (self.call_name, "Com_Write Enter.")
         #await asyncio.sleep(0)
-        write_event_loop_count = 0
         while True:
+            #print (self.call_name,"w",end=" ",flush=True)
             if self.Stop_Sign:
                 break
-            # 把cpu 还给事件循环
-            await asyncio.sleep(0)
 
             # 1、接受确认帧
-            #print ("Com_Write confirm write")
+            """
+            print ("Com_Write confirm write", self.confirm_Queue.qsize())
             while True:
-                write_event_loop_count += 1
                 try:
                     buf = self.confirm_Queue.get(block=False)
-                    #print (self.call_name, "Send Confirm", print_hex(buf))
-                    self.com.write(buf)
-                    while self.com.out_waiting > 0:
-                        await asyncio.sleep(0)
+                    self.com_writer.write(buf)
+                    await self.com_writer.drain()
+                    print ("Send Confirm Frame", hex(buf[5]))
                 except queue.Empty:
                     break
+            """
 
-            # 2、补发数据帧
-            #print ("Com_Write Missing write")
-            # 补发 跳帧
-            write_event_loop_count += 1
-            if write_event_loop_count > 3:
-                write_event_loop_count == 0
+            # 2、发送数据帧（按队列顺序）
+            #print (self.call_name, "Send Normal Frame com.write")
+            try:
+                buf, idx, time_out = self.send_Queue.get(block=False)
+                time_out = self.confirm_timeout_const
+                self.send_Queue.put([buf, idx, time_out])
+                oStr = assemble_Frame(idx, buf)
+                self.com_writer.write(oStr)
+                await asyncio.sleep(time_out)
+                await self.com_writer.drain()
 
-                not_send_ends = list(self.send_bufs.keys())
-                had_sended =  list(set(range(self.send_bufs_len)) - set(not_send_ends))            
-                re_send = [i for i in not_send_ends if any(i < j for j in had_sended)]
-                for i in re_send:
-                    # 也许在 补发 的过程中，已经收到 确认帧了
-                    if i not in self.send_bufs.keys():
-                        continue
-                    buf = self.send_bufs[i][0]
-                    oStr = assemble_Frame(i, buf)
-                    l = self.com.write(oStr)
-                    while self.com.out_waiting > 0:
-                        await asyncio.sleep(0)
-                    # 也许在 补发 的过程中，已经收到 确认帧了
-                    if i not in self.send_bufs.keys():
-                        continue
-                    time_out = self.confirm_timeout_const + time.time()
-                    self.send_bufs[i][1] = time_out
-                    print (self.call_name, "Send Missing Frame re_send com.write", i, l, len(re_send))
-                    # 把cpu 还给事件循环
-                    await asyncio.sleep(0)
-
-            # 3、补发 超时帧
-            # 选择出 所有已发的 数据帧
-            k = list(self.send_bufs.keys())
-            k.sort()
-            # 因为是 协程，可能在 循环遍历 self.send_bufs.keys() 过程中，
-            # send_bufs 可能就发送变化了，所以不能用 keys() 作为遍历对象
-            for i in k:
-                # 也许在 补发 的过程中，已经收到 确认帧了
-                if i not in self.send_bufs.keys():
-                    continue
-                if self.send_bufs[i][1] == 0:
-                    continue
-                # 超时是一种重发的 启动信号，由于 串口缓冲区的存在，
-                # 超时只能是很严重的情况下才能成立
-                # 而且这样的超时，应该是 硬件链路 有着严重误码，才可能出现
-                # 既然 误码 程度如此之大，其通信 机制就不是靠 这样的数据帧 设计结构 来解决了
-                # 帧长 设定为 0xAA，有不必要的开销，如果能更长一些，当然开销要小很多
-                # 不过 对误码的 处理就更复杂了
-                if time.time() > self.send_bufs[i][1] :
-                    buf = self.send_bufs[i][0]
-                    oStr = assemble_Frame(i, buf)
-                    l = self.com.write(oStr)
-                    while self.com.out_waiting > 0:
-                        await asyncio.sleep(0)
-                    # Windows 10 系统分配的串口发送缓冲区大小为 4KB
-                    # 表面上 write 是阻塞方式，实际上只是写缓冲区
-
-                    # 也许在 补发 的过程中，已经收到 确认帧了
-                    if i not in self.send_bufs.keys():
-                        continue
-                    time_out = self.confirm_timeout_const + time.time()
-                    self.send_bufs[i][1] = time_out
-                    print ("Send Missing Frame com.write", l, end="")
-                    #print (self.call_name, "Send Missing Frame timeout com.write", i, l, len(k))
-                    #print_hex(oStr, "-")
-                    # 把cpu 还给事件循环
-                    await asyncio.sleep(0)
-
-            # 4、发送一个未发的数据帧
-            ids = list(self.send_bufs.keys())
-            #print (ids)
-            ids = [i for i in ids if self.send_bufs[i][1] == False]
-            # 把未发送的数据找出来
-            if len(ids) > 0:
-                ids.sort()
-                buf = self.send_bufs[ids[0]][0]
-                oStr = assemble_Frame(ids[0], buf)
-                l = self.com.write(oStr)
-                while self.com.out_waiting > 0:
-                    await asyncio.sleep(0)
-                print (self.call_name, "Send Normal Frame com.write", ids[0], l)
-                #print_hex(oStr, "-")
-                time_out = self.confirm_timeout_const + time.time()
-                self.send_bufs[ids[0]][1] = time_out # 超时的时间点
-            # 只发一个正常的数据帧
-            # 把cpu 还给事件循环
-            await asyncio.sleep(0)
+                #print (self.call_name, "Send Frame", idx, len(buf),
+                #       print_hex(buf[:10]),print_hex(oStr[-4:]))
+            except queue.Empty:
+                await asyncio.sleep(0)
 
     async def Com_Read(self):
         """
@@ -274,32 +197,32 @@ class serial_verify:
         需要用 task 来启动
         # 55 55 55 L1 L2 ZZ ... C1 C2 C3 C4 AA AA
         """
+        print (self.call_name, "Com_Read Enter.")
         d = b""
         while True:
+            #print (self.call_name,"r1", end=" ",flush=True)
             if self.Stop_Sign:
                 break
-            while self.com.in_waiting == 0:
-                # 没有数据缓冲，可以切换出去了
-                #print (f"&{self.call_name[0]}&", end="",flush=True)
-                await asyncio.sleep(0)
-            in_buf = self.com.read(self.com.in_waiting)
+            in_buf = await self.com_reader.readuntil(separator=b"\xAA\xAA")
+            
             #print (self.call_name, "Com_Read from Buf", end="")
             #print_hex (in_buf, "-")
             d += in_buf
             #print (self.call_name, " Com_Work_Read d +++++++++++++ ", len(d), end=" ")
             #print (print_hex (d[:10]), print_hex (d[-10:]))
-            print (self.call_name[0], end="",flush=True)
+            
             # 找 第一个 55 AA 帧同步字
             # 55 55 55 L1 L2 ZZ ... C1 C2 C3 C4 AA AA
+            #print (self.call_name,"r1-2", end=" ",flush=True)
             match = re.search(b"\x55\x55\x55", d)
             if match and len(d) >= match.start() +8:
-                print (f"=={self.call_name[0]}==", end="",flush=True)
+                #print (self.call_name,"r2", end=" ",flush=True)
+                #print (f"=={self.call_name[0]}==", end="",flush=True)
                 self.watch_dog = time.time()
                 # 喂狗
                 i = match.start()
                 frame_head = d[i:i +6]
-                f_len = 0
-                f_idx = struct.unpack ("=xxxxxB", frame_head)
+                f_len, f_idx = struct.unpack ("=xxxHB", frame_head)
                 #print (self.call_name, "f_len, f_idx ", f_len, f_idx, len(d[i:]), i, print_hex (d[i:i +8]))
                 #print_hex (d[i:i +8])
 
@@ -309,25 +232,44 @@ class serial_verify:
                     # 接收确认帧
                     # 55 55 55 AA AA ZZ AA AA
                     # 确认帧如果出错的话，通信就岌岌可危了
-                    print (self.call_name, "Recv Confirm Frame ", f_idx)
                     # 接收确认帧 无误，处理发送缓冲
+                    """
+                    # 这一段使老代码，用字典方式处理写缓冲
                     if f_idx in self.send_bufs:
                         del self.send_bufs[f_idx]
+                    """
+                    #print (self.call_name,"r3", end=" ",flush=True)
+                    # 新的，用asyncio队列方式处理写缓存
+                    send_list = list(self.send_Queue.queue)
+                    new_list = [s for s in send_list if s[1] != f_idx]
+                    self.send_Queue.queue.clear()
+                    for s in new_list:
+                        self.send_Queue.put(s)
+                    if self.send_Queue.empty():
+                        # 全部接收完成了，解开 写入 锁，开始接收新的输入
+                        self.write_lock.release()
+                    #print (self.call_name, "Recv Confirm Frame ", f_idx, len(self.recv_bufs))
                     d = d[i +8:]
+
                 elif f_len +12 <= len(d[i:]) :
+                    #print (self.call_name,"r4", end=" ",flush=True)
                     # 55 55 55 L1 L2 ZZ ... C1 C2 C3 C4 AA AA
                     c1 = crc32_func (d[i: i +6 +f_len])
+                    #print (f_len, print_hex(d[i +6 +f_len:i +6 +f_len +4],"-"))
                     cc1, = struct.unpack("=I", d[i +6 +f_len:i +6 +f_len +4])
+                    #print (self.call_name, "Test CRC")
                     # 接受 数据帧
                     if c1 == cc1:
+                        #print (self.call_name, "Test CRC Success")
                         # crc校验成功，写输出数据
                         # 返回 确认帧
                         # 55 55 55 AA AA ZZ AA AA
                         confirm_Str = b"\x55\x55\x55\xAA\xAA" 
                         confirm_Str += struct.pack("=B", f_idx) + b"\xAA\xAA"
-                        self.confirm_Queue.put (confirm_Str)
-                        #self.confirm_Queue.put (confirm_Str)
-                        print (self.call_name, "Recv Right ", f_idx)
+                        self.com_writer.write(confirm_Str)
+                        await self.com_writer.drain()
+                        
+                        #print (self.call_name, "Recv Right ", f_idx)
                         if f_idx not in self.recv_bufs:
                             # 已经接收过了，就不再重写了，对付 不必要的 补发帧
                             self.recv_bufs[f_idx] = d[i +6: i +6 +f_len]
@@ -337,8 +279,7 @@ class serial_verify:
                         if 0 in self.recv_bufs:
                             f_idx_len, f_buf_len = \
                                 struct.unpack("=BH",self.recv_bufs[0][:3])
-                            if len(self.recv_bufs) == f_idx_len:
-                                #print (self.call_name, "Read All off")
+                            if len(self.recv_bufs) == f_idx_len:                                
                                 ids = list(self.recv_bufs.keys())
                                 ids.sort()
                                 oStr = b""
@@ -348,9 +289,12 @@ class serial_verify:
                                     else:
                                         oStr += self.recv_bufs[i]
                                     del self.recv_bufs[i]
+                                #print (self.call_name, "Read All off", len(oStr), f_buf_len, print_hex(oStr[:5]), oStr[:40])
                                 await self.recv_Queue.put(oStr)
+                                #print (self.call_name, "recv_Queue.put", len(oStr))
                         d = d[i +12 +f_len:]
                     else:
+                        #print (self.call_name,"r5", end=" ",flush=True)
                         #print (self.call_name, "Recv Fail  ", f_idx)
                         # 没有找到，只好跳过这个帧头，继续找下一帧了
                         d = d[i +6:]
@@ -365,15 +309,15 @@ async def main():
     C1 = serial_verify("COM5", baud_rate, "AA")
     C2 = serial_verify("COM6", baud_rate, "BB")
 
-    C1.Start()
-    C2.Start()
+    await C1.Start()
+    await C2.Start()
 
     b1 = os.urandom(8*1024)
     #b1 = os.urandom(64)
     print_hex (b1[:10], "-")
     await C1.write(b1)
     b2 = await C2.read()
-    await asyncio.sleep(5)
+    await asyncio.sleep(10)
     C1.Stop_Sign = True
     C2.Stop_Sign = True
     print (b1[:50])
@@ -386,7 +330,7 @@ async def main():
 
 async def main1(baud_rate, com_port, stop_sign, buf):
     C1 = serial_verify(com_port, baud_rate, "AA")
-    C1.Start()
+    await C1.Start()
     await C1.write(buf)
     await C1.write(buf)
     b1 = await C1.read()
@@ -407,7 +351,7 @@ def C1(baud_rate, com_port, stop_sign, buf, ret_Q):
     
 async def main2(baud_rate, com_port, stop_sign, buf):
     C2 = serial_verify(com_port, baud_rate, "BB")
-    C2.Start()
+    await C2.Start()
     await C2.write(buf)
     await C2.write(buf)
     b2 = await C2.read()
@@ -461,8 +405,10 @@ def multiP_main():
 
 if __name__ == "__main__":
     #asyncio.run(main())
-    #multiP_main()
+    multiP_main()
+    """
     N = 1
     t = timeit.timeit(multiP_main, number=N)
     #t = timeit.timeit(asyncio.run(main()), number=N)
     print ("sum_time", t, t/N)
+    """
