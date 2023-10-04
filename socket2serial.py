@@ -44,7 +44,7 @@ class Socket_Forward_Serial_Base:
                     await self.serial.write(b"\x00" +sc_pack +d)
                     # 这个是阻塞的
                 else:
-                    print ('close net_recv', Error, svr_port, clt_port)
+                    print ('close net_recv', len(d), svr_port, clt_port)
                     # 网络已断开，需要打扫现场，并告知对端
                     if (svr_port, clt_port) in self.writers:
                         self.writers[(svr_port, clt_port)].close()

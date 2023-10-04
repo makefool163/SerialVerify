@@ -44,7 +44,6 @@ class serial_verify:
         self.com_port = com_port
 
         self.recv_bufs  = {}
-        #self.confirm_Queue = queue.Queue()
         # 确认帧，不可能重发，如果确认帧都不能保证正确，通信效果就岌岌可危了
         self.send_Queue = queue.Queue()
         self.com_read_buf  = asyncio.queues.Queue()
@@ -52,7 +51,6 @@ class serial_verify:
         self.recv_Queue = asyncio.queues.Queue()
         self.Stop_Sign = False
         self.write_lock = asyncio.Lock()
-        self.write_Semaphore = asyncio.Semaphore()
         self.watch_dog = time.time()
 
     async def OpenComm(self):
@@ -88,7 +86,6 @@ class serial_verify:
 
     def __del__(self):
         self.Stop()
-        #self.com_reader.close()
         self.com_writer.close()
 
     async def Watch_Dog(self):
