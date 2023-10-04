@@ -140,7 +140,6 @@ class Socket_Forward_Serial_Client(Socket_Forward_Serial_Base):
             self.servers[port] = [await asyncio.start_server(self.server_listen, 
                                                             sock=server_sock),
                                                             server_sock]
-                            
     def Start(self):
         super().Start()
         # 由于 Start 必须马上返回，所以不能是协程
