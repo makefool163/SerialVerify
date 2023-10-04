@@ -6,7 +6,7 @@ from __future__ import absolute_import, print_function
 # pip install pygubu-designer
 
 import socket2serial
-import serial_verify
+import serial_verify_v2
 import serial.tools.list_ports as port_list
 import importlib
 import os
@@ -113,7 +113,8 @@ class GuiS2SApp:
         print ("Run as Server")
         if self.btServer['text'] == "Run as Server":
             self.btServer['text'] = "Stop Server"
-            self.btClient['state'] = "disable"
+            self.btClient.config(state=tk.DISABLED)
+            #self.btClient['state'] = "disable"
             self.txtRecv.delete("1.0","end")
             self.txtSend.delete("1.0","end")
             self.txtRecv_idx = 0
@@ -122,7 +123,7 @@ class GuiS2SApp:
             print (COM_Name)
             log_file = "d:/stk/s2s_server.log"
             log_file = None
-            self.com_server = serial_verify.serial_verify\
+            self.com_server = serial_verify_v2.serial_verify\
                 (com_port = COM_Name, \
                 baud_rate = int(self.cmbox_bdrate.get()),\
                 call_name= "Server"
@@ -134,18 +135,20 @@ class GuiS2SApp:
             self.ss.Start()
         else:
             self.btServer['text'] = "Run as Server"
-            self.btClient['state'] = "normal"
+            self.btClient.config(state= tk.NORMAL)
+            #self.btClient['state'] = "normal"
             self.ss.Stop()
             del self.com_server
             del self.ss
-            importlib.reload(serial_verify)
+            importlib.reload(serial_verify_v2)
             importlib.reload(socket2serial)
       
     def runC_click(self, event=None):
         print ("Run as Client")
         if self.btClient['text'] == "Run as Client":
             self.btClient['text'] = "Stop Client"
-            self.btServer['state'] = "disable"
+            self.btServer.config(state=tk.DISABLED)
+            #self.btServer['state'] = "disable"
             self.txtRecv_idx = 0
             self.txtSend_idx = 0
             self.txtRecv.delete("1.0","end")
@@ -154,7 +157,7 @@ class GuiS2SApp:
             print (COM_Name)
             log_file = "d:/stk/s2s_client.log"
             log_file = None
-            self.com_client = serial_verify.serial_verify\
+            self.com_client = serial_verify_v2.serial_verify\
                 (com_port = COM_Name, \
                 baud_rate = int(self.cmbox_bdrate.get()),\
                 call_name= "Client"
@@ -168,11 +171,12 @@ class GuiS2SApp:
             self.ss.Start()
         else:
             self.btClient['text'] = "Run as Client"
-            self.btServer['state'] = "normal"
+            self.btServer.config(state=tk.NORMAL)
+            #self.btServer['state'] = "normal"
             self.ss.Stop()
             del self.com_client
             del self.ss
-            importlib.reload(serial_verify)
+            importlib.reload(serial_verify_v2)
             importlib.reload(socket2serial)
 
     def gui_debug(self, SC, inStr):
@@ -180,11 +184,13 @@ class GuiS2SApp:
             self.txtRecv_idx +=1 
             inStr = str(self.txtRecv_idx) + "\t" + inStr
             self.txtRecv.insert(tk.END, inStr+"\n")
+            self.txtRecv.see(tk.END)
             self.txtRecv.update()
         else:
             self.txtSend_idx +=1
             inStr = str(self.txtSend_idx) + "\t" + inStr
             self.txtSend.insert(tk.END, inStr+"\n")
+            self.txtSend.see(tk.END)
             self.txtSend.update()
 
     def on_closing(self):
