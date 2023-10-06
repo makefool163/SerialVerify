@@ -81,7 +81,6 @@ class serial_verify:
             self.watch_dog_task.cancel()
             #self.com_reader.close()
             self.com_writer.close()
-            print ('serial Stop')
         except Exception as e:
             print ("Stop Error ", e)
 
@@ -101,8 +100,6 @@ class serial_verify:
                 print ("WATCH DOG ! WATCH DOG !!!")
                 self.com_reader.close()
                 self.com_reader, self.com_writer = await self.OpenComm()
-                self.send_Queue.queue.clear()
-                await self.write_lock.release()
 
     async def write(self, buf):
         """
@@ -110,9 +107,7 @@ class serial_verify:
         如果串口正忙的话，该调用会被阻塞直到允许数据发送
         """
         frame_len = 1024
-        print ("_c", end="", flush=True)
         await self.write_lock.acquire()
-        print ("W", end="", flush=True)
         # 把 输入 组合成 待发送的 数据帧
         idx = 0
         buf_len = len(buf)
@@ -133,7 +128,6 @@ class serial_verify:
         f_head = struct.pack("=BH", idx, buf_len)
         send_bufs[0][0] = f_head +send_bufs[0][0]
 
-        self.send_Queue.queue.clear()
         for s in send_bufs:
             self.send_Queue.put(s)
             # 队列的元素： 原始数据,帧序号,超时时间
@@ -246,27 +240,25 @@ class serial_verify:
                 #print_hex (d[i:i +8])
 
                 if d[i +3: i +5] == b"\xAA\xAA" \
-                and len(d) >= i +10 \
-                and d[i +8: i +10] == b"\xAA\xAA":
+                and len(d) >= i +8 \
+                and d[i +6: i +8] == b"\xAA\xAA":
                     # 接收确认帧
-                    # 55 55 55 AA AA ZZ ZZ ZZ AA AA
+                    # 55 55 55 AA AA ZZ AA AA
                     # 确认帧如果出错的话，通信就岌岌可危了
                     # 接收确认帧 无误，处理发送缓冲
 
                     #print (self.call_name,"r3", end=" ",flush=True)
-                    if d[5] == d[6] and d[6] == d[7]:
-                        # 帧序号 连发 3次，出错的概率变得很小了
-                        # 用队列方式处理写缓存，把 已确认接收的
-                        send_list = list(self.send_Queue.queue)
-                        new_list = [s for s in send_list if s[1] != f_idx]
-                        self.send_Queue.queue.clear()
-                        for s in new_list:
-                            self.send_Queue.put(s)
-                        if self.send_Queue.empty():                        
-                            # 全部接收完成了，解开 写入 锁，开始接收新的输入                            
-                            self.write_lock.release()
-                        #print (self.call_name, "Recv Confirm Frame ", f_idx, len(self.recv_bufs))
-                    d = d[i +10:]
+                    # 用队列方式处理写缓存，把 已确认接收的
+                    send_list = list(self.send_Queue.queue)
+                    new_list = [s for s in send_list if s[1] != f_idx]
+                    self.send_Queue.queue.clear()
+                    for s in new_list:
+                        self.send_Queue.put(s)
+                    if self.send_Queue.empty():
+                        # 全部接收完成了，解开 写入 锁，开始接收新的输入
+                        self.write_lock.release()
+                    #print (self.call_name, "Recv Confirm Frame ", f_idx, len(self.recv_bufs))
+                    d = d[i +8:]
 
                 elif f_len +12 <= len(d[i:]) :
                     #print (self.call_name,"r4", end=" ",flush=True)
@@ -280,9 +272,9 @@ class serial_verify:
                         #print (self.call_name, "Test CRC Success")
                         # crc校验成功，写输出数据
                         # 返回 确认帧
-                        # 55 55 55 AA AA ZZ ZZ AA AA
+                        # 55 55 55 AA AA ZZ AA AA
                         confirm_Str = b"\x55\x55\x55\xAA\xAA" 
-                        confirm_Str += struct.pack("=BBB", f_idx, f_idx, f_idx) + b"\xAA\xAA"
+                        confirm_Str += struct.pack("=B", f_idx) + b"\xAA\xAA"
                         self.com_writer.write(confirm_Str)
                         await self.com_writer.drain()
                         
@@ -308,7 +300,6 @@ class serial_verify:
                                     del self.recv_bufs[i]
                                 #print (self.call_name, "Read All off", len(oStr), f_buf_len, print_hex(oStr[:5]), oStr[:40])
                                 await self.recv_Queue.put(oStr)
-                                print ("p", len(oStr), end="", flush=True)
                                 #print (self.call_name, "recv_Queue.put", len(oStr))
                         d = d[i +12 +f_len:]
                     else:
