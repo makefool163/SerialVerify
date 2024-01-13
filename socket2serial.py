@@ -5,7 +5,7 @@ import asyncio
 import struct
 import argparse
 import socket
-import serial_verify_v2
+import serial_verify_v4
 import time
 
 # 1    控制命令
